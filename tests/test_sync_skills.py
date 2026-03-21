@@ -1,5 +1,6 @@
 """sync_skills 回归测试"""
 
+import shutil
 import time
 from pathlib import Path
 
@@ -366,6 +367,25 @@ class TestPreview:
 
 
 class TestMultiTarget:
+    def test_collect_from_multiple_targets(self, env):
+        """S2: 多个目标各有不同的新 skill，都应收集到 Other/ 并交叉分发"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_a, "new-from-a", "from-a")
+        create_skill(target_b, "skill-a", "a")
+        create_skill(target_b, "new-from-b", "from-b")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        execute_bidirectional(plan, source, [target_a, target_b])
+
+        # 两个新 skill 都收集到 Other/
+        assert (source / "Other" / "new-from-a" / "SKILL.md").read_text() == "from-a"
+        assert (source / "Other" / "new-from-b" / "SKILL.md").read_text() == "from-b"
+        # 交叉分发
+        assert (target_a / "new-from-b" / "SKILL.md").is_file()
+        assert (target_b / "new-from-a" / "SKILL.md").is_file()
+
     def test_targets_independent(self, env, capsys):
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
@@ -379,3 +399,253 @@ class TestMultiTarget:
         combined = output.out + output.err
         assert "无变更" in combined
         assert (target_b / "skill-b" / "SKILL.md").is_file()
+
+    def test_collect_from_target_b_only(self, env):
+        """target_b 有新 skill，target_a 没有 → 只从 target_b 收集"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_b, "skill-a", "a")
+        create_skill(target_b, "only-in-b", "b-content")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        execute_bidirectional(plan, source, [target_a, target_b])
+
+        assert (source / "Other" / "only-in-b" / "SKILL.md").read_text() == "b-content"
+        assert (target_a / "only-in-b" / "SKILL.md").is_file()
+
+    def test_collect_from_multiple_targets(self, env):
+        """多个目标各有不同的新 skill，都应收集到 Other/ 并交叉分发"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_a, "new-from-a", "from-a")
+        create_skill(target_b, "skill-a", "a")
+        create_skill(target_b, "new-from-b", "from-b")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        execute_bidirectional(plan, source, [target_a, target_b])
+
+        # 两个新 skill 都收集到 Other/
+        assert (source / "Other" / "new-from-a" / "SKILL.md").read_text() == "from-a"
+        assert (source / "Other" / "new-from-b" / "SKILL.md").read_text() == "from-b"
+        # 交叉分发
+        assert (target_a / "new-from-b" / "SKILL.md").is_file()
+        assert (target_b / "new-from-a" / "SKILL.md").is_file()
+
+
+# ============================================================
+# 用户场景回归测试（对应 DESIGN.md 第3节）
+# ============================================================
+
+
+class TestUserScenarios:
+    """覆盖 DESIGN.md 中定义的所有用户场景"""
+
+    def test_s1_source_add_skill(self, env):
+        """S1: 在源目录新增 skill → 分发到所有目标，已有 skill 不受影响"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "existing", "old")
+        create_skill_in_category(source, "Code", "new-skill", "new")
+        create_skill(target_a, "existing", "old")
+        create_skill(target_b, "existing", "old")
+
+        run_main(source, [target_a, target_b])
+
+        # new-skill 被分发到两个目标
+        assert (target_a / "new-skill" / "SKILL.md").read_text() == "new"
+        assert (target_b / "new-skill" / "SKILL.md").read_text() == "new"
+        # existing 保持不变
+        assert (target_a / "existing" / "SKILL.md").read_text() == "old"
+        assert (target_b / "existing" / "SKILL.md").read_text() == "old"
+
+    def test_s1_source_add_nested(self, env):
+        """S1: 在源目录嵌套分类中新增 skill → 平铺分发"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill_in_category(source, "Lark/SubCategory", "deep-skill", "deep")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_b, "skill-a", "a")
+
+        run_main(source, [target_a, target_b])
+
+        # 嵌套分类下的 skill 也被平铺分发
+        assert (target_a / "deep-skill" / "SKILL.md").read_text() == "deep"
+        assert (target_b / "deep-skill" / "SKILL.md").read_text() == "deep"
+        # 不应有分类目录
+        assert not (target_a / "Lark").exists()
+
+    def test_s2_target_add_skill(self, env):
+        """S2: 在某个目标新增 skill → 收集到 Other/ → 分发到其他目标"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_a, "created-in-codex", "codex-new")
+        create_skill(target_b, "skill-a", "a")
+
+        run_main(source, [target_a, target_b])
+
+        # 收集到源 Other/
+        assert (source / "Other" / "created-in-codex" / "SKILL.md").read_text() == "codex-new"
+        # 分发到 target_b
+        assert (target_b / "created-in-codex" / "SKILL.md").read_text() == "codex-new"
+        # target_a 中原始的保持不变
+        assert (target_a / "created-in-codex" / "SKILL.md").is_file()
+
+    def test_s3_target_update_skill(self, env):
+        """S3: 在某个目标修改 skill → 更新回源 → 分发到其他目标"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "original")
+        create_skill(target_a, "skill-a", "original")
+        create_skill(target_b, "skill-a", "original")
+
+        # 在 target_a 中修改
+        time.sleep(0.1)
+        (target_a / "skill-a" / "SKILL.md").write_text("updated-in-codex")
+
+        run_main(source, [target_a, target_b])
+
+        # 源被更新
+        assert (source / "Code" / "skill-a" / "SKILL.md").read_text() == "updated-in-codex"
+
+    def test_s5_source_duplicate_names(self, env):
+        """S5: 源目录不同分类下重名 → 报错退出"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "dup-skill", "v1")
+        create_skill_in_category(source, "Lark", "dup-skill", "v2")
+
+        with pytest.raises(SystemExit):
+            run_main(source, [target_a, target_b])
+
+    def test_s4_source_updated_warns(self, env):
+        """S4: 源目录修改 skill → 双向模式不会自动更新目标，但应警告用户"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "old")
+        create_skill(target_a, "skill-a", "old")
+        create_skill(target_b, "skill-a", "old")
+
+        # 源目录修改
+        time.sleep(0.1)
+        (source / "Code" / "skill-a" / "SKILL.md").write_text("updated-in-source")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        # 不应有 collect_update（因为是源更新，不是目标更新）
+        assert len(plan.collect_update) == 0
+        # 应有警告
+        assert len(plan.warnings) >= 1
+        assert any("skill-a" in w for w in plan.warnings)
+        assert any("--force" in w for w in plan.warnings)
+
+    def test_s6_multi_target_conflict(self, env):
+        """S6: 多个目标同时修改同一 skill → 跳过自动合并，警告用户"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "original")
+        create_skill(target_a, "skill-a", "original")
+        create_skill(target_b, "skill-a", "original")
+
+        # 两个目标都修改了同一个 skill
+        time.sleep(0.1)
+        (target_a / "skill-a" / "SKILL.md").write_text("updated-by-a")
+        (target_b / "skill-a" / "SKILL.md").write_text("updated-by-b")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        # 冲突时不应自动收集更新
+        assert len(plan.collect_update) == 0
+        # 应有警告
+        assert len(plan.warnings) >= 1
+        assert any("skill-a" in w and "多个目标" in w for w in plan.warnings)
+
+    def test_s6b_source_and_target_both_modified(self, env):
+        """S6b: 源和目标都修改了同一 skill → 冲突，跳过并警告"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "original")
+        create_skill(target_a, "skill-a", "original")
+        create_skill(target_b, "skill-a", "original")
+
+        # 源先修改
+        time.sleep(0.1)
+        (source / "Code" / "skill-a" / "SKILL.md").write_text("updated-in-source")
+        # 目标后修改（mtime 更大）
+        time.sleep(0.1)
+        (target_a / "skill-a" / "SKILL.md").write_text("updated-in-target")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        # 不应自动收集（两边都改了是冲突）
+        assert len(plan.collect_update) == 0
+        # 应有冲突警告
+        assert any("skill-a" in w and "都被修改" in w for w in plan.warnings)
+
+    def test_s7_delete_from_target_gets_restored(self, env):
+        """S7: 从目标删除 skill → 双向同步会重新分发回来"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill_in_category(source, "Code", "skill-b", "b")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_a, "skill-b", "b")
+        create_skill(target_b, "skill-a", "a")
+        create_skill(target_b, "skill-b", "b")
+
+        # 从 target_a 删除 skill-b
+        shutil.rmtree(target_a / "skill-b")
+        assert not (target_a / "skill-b").exists()
+
+        run_main(source, [target_a, target_b])
+
+        # skill-b 被从源重新分发回 target_a
+        assert (target_a / "skill-b" / "SKILL.md").read_text() == "b"
+
+    def test_s8_delete_from_source_bidir_collects_back(self, env):
+        """S8: 从源目录删除 skill → 双向同步会从目标收集回来"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill_in_category(source, "Code", "to-delete", "del")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_a, "to-delete", "del")
+        create_skill(target_b, "skill-a", "a")
+        create_skill(target_b, "to-delete", "del")
+
+        # 从源删除
+        shutil.rmtree(source / "Code" / "to-delete")
+        assert not (source / "Code" / "to-delete").exists()
+
+        run_main(source, [target_a, target_b])
+
+        # 双向模式下，to-delete 被从目标收集回 Other/
+        assert (source / "Other" / "to-delete" / "SKILL.md").is_file()
+
+    def test_s8_delete_from_source_force_removes_all(self, env):
+        """S8: 从源目录删除 skill + force 模式 → 从所有目标也删除"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill_in_category(source, "Code", "to-delete", "del")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_a, "to-delete", "del")
+        create_skill(target_b, "skill-a", "a")
+        create_skill(target_b, "to-delete", "del")
+
+        # 从源删除
+        shutil.rmtree(source / "Code" / "to-delete")
+
+        run_main(source, [target_a, target_b], force=True)
+
+        # force 模式下，目标中的 to-delete 被删除
+        assert not (target_a / "to-delete").exists()
+        assert not (target_b / "to-delete").exists()
+        # 源中也没有被收集回来
+        assert not (source / "Other" / "to-delete").exists()
+        # skill-a 不受影响
+        assert (target_a / "skill-a" / "SKILL.md").is_file()
+
+    def test_s12_all_in_sync(self, env, capsys):
+        """S12: 所有目录内容一致 → 无操作"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "same")
+        create_skill_in_category(source, "Lark", "skill-b", "same")
+        create_skill(target_a, "skill-a", "same")
+        create_skill(target_a, "skill-b", "same")
+        create_skill(target_b, "skill-a", "same")
+        create_skill(target_b, "skill-b", "same")
+
+        run_main(source, [target_a, target_b])
+        output = capsys.readouterr()
+        assert "无需同步" in output.err

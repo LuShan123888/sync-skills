@@ -42,10 +42,16 @@ class SyncPlan:
     # 分发阶段
     creates: list[tuple[str, Path]] = field(default_factory=list)    # (skill_name, target_dir)
     deletes: list[tuple[str, Path]] = field(default_factory=list)    # (skill_name, target_dir)
+    # 警告（不阻塞同步，仅提示用户）
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def has_changes(self) -> bool:
         return bool(self.collect_new or self.collect_update or self.creates or self.deletes)
+
+    @property
+    def has_warnings(self) -> bool:
+        return bool(self.warnings)
 
 
 # ============================================================
@@ -132,6 +138,10 @@ def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
     plan = SyncPlan()
 
     # 阶段1：收集新增/修改的 skills
+    # 按 skill 分组记录：哪些目标有修改，源是否也有修改
+    target_updated: dict[str, list[Path]] = {}     # skill_name -> [修改过的 target_dirs]
+    source_also_changed: set[str] = set()           # 源也修改过的 skill 名称
+
     for target_dir in targets:
         if not target_dir.is_dir():
             continue
@@ -139,13 +149,46 @@ def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
             source_rel = find_skill_in_source_by_name(source_dir, skill_name)
             if source_rel is None:
                 plan.collect_new.append((skill_name, target_dir))
+                continue
+
+            source_skill = source_dir / source_rel / "SKILL.md"
+            target_skill = target_dir / skill_name / "SKILL.md"
+            if source_skill.read_bytes() == target_skill.read_bytes():
+                continue
+
+            # 内容不同，记录修改来源
+            target_is_newer = target_skill.stat().st_mtime > source_skill.stat().st_mtime
+            if target_is_newer:
+                target_updated.setdefault(skill_name, []).append(target_dir)
             else:
-                source_skill = source_dir / source_rel / "SKILL.md"
-                target_skill = target_dir / skill_name / "SKILL.md"
-                # 仅当目标更新且内容不同时才收集
-                if (target_skill.stat().st_mtime > source_skill.stat().st_mtime
-                        and target_skill.read_bytes() != source_skill.read_bytes()):
-                    plan.collect_update.append((skill_name, source_rel, target_dir))
+                source_also_changed.add(skill_name)
+
+    # 分析冲突：遍历所有有变更的 skill，决定动作
+    all_changed_skills = set(target_updated.keys()) | source_also_changed
+    for skill_name in sorted(all_changed_skills):
+        source_rel = find_skill_in_source_by_name(source_dir, skill_name)
+        modified_targets = target_updated.get(skill_name, [])
+        source_changed = skill_name in source_also_changed
+
+        # 情况1: 多个目标都修改了 → 冲突
+        if len(modified_targets) > 1:
+            dirs_str = ", ".join(str(d) for d in modified_targets)
+            plan.warnings.append(
+                f"skill '{skill_name}' 在多个目标目录中被修改 ({dirs_str})，已跳过自动合并，请手动处理"
+            )
+        # 情况2: 源和目标都修改了 → 冲突
+        elif modified_targets and source_changed:
+            plan.warnings.append(
+                f"skill '{skill_name}' 在源目录和目标目录 ({modified_targets[0]}) 中都被修改，已跳过自动合并，请手动处理"
+            )
+        # 情况3: 仅目标修改了 → 安全收集
+        elif modified_targets:
+            plan.collect_update.append((skill_name, source_rel, modified_targets[0]))
+        # 情况4: 仅源修改了 → 提示用 --force
+        else:
+            plan.warnings.append(
+                f"skill '{skill_name}' 在源目录有更新，但双向模式不会自动覆盖目标，请使用 --force 同步"
+            )
 
     # 阶段2：计算分发变更
     source_skills = find_skills_in_source(source_dir)
@@ -202,9 +245,20 @@ def show_preview(plan: SyncPlan, source_dir: Path, targets: list[Path], force: b
         total_after = source_count + len(plan.collect_new)
         print(f"源目录当前 skills 数量: {Color.CYAN}{source_count}{Color.NC}, 同步后: {Color.CYAN}{total_after}{Color.NC}\n")
 
-    if not plan.has_changes:
+    if not plan.has_changes and not plan.has_warnings:
         label = "所有目标目录已与源目录一致，无需操作" if force else "没有任何变更需要执行"
         print(f"  {Color.GREEN}{label}{Color.NC}\n")
+        return False
+
+    # 警告信息（不阻塞同步，仅提示）
+    if plan.warnings:
+        print(f"{Color.BOLD}--- 注意 ---{Color.NC}\n")
+        for warning in plan.warnings:
+            print(f"  {Color.YELLOW}⚠ {warning}{Color.NC}")
+        print()
+
+    if not plan.has_changes:
+        print(f"  {Color.GREEN}除以上警告外，没有需要执行的变更{Color.NC}\n")
         return False
 
     # 阶段1：收集（仅双向模式）
@@ -257,11 +311,15 @@ def execute_bidirectional(plan: SyncPlan, source_dir: Path, targets: list[Path])
     print(file=sys.stderr)
 
     collected = 0
+    collected_names = set()
     for name, from_dir in plan.collect_new:
+        if name in collected_names:
+            continue
         dest = source_dir / "Other" / name
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(from_dir / name, dest, copy_function=shutil.copy2)
         collected += 1
+        collected_names.add(name)
         log_success(f"  + 已收集到 Other/{name}")
 
     updated = 0
