@@ -1,0 +1,14 @@
+[project]
+name = "sync-skills"
+version = "0.1.0"
+description = "Skills 双向/强制同步工具"
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+sync-skills = "sync_skills:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
