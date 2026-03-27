@@ -118,6 +118,15 @@ def find_skill_in_source_by_name(source_dir: Path, name: str) -> str | None:
     return None
 
 
+def find_skill_in_targets(targets: list[Path], name: str) -> list[Path]:
+    """在所有目标目录中查找指定名称的 skill，返回包含该 skill 的目标目录列表"""
+    result = []
+    for target_dir in targets:
+        if target_dir.is_dir() and (target_dir / name).is_dir() and (target_dir / name / "SKILL.md").is_file():
+            result.append(target_dir)
+    return result
+
+
 def check_duplicate_names(skills: list[Skill]) -> list[tuple[str, str, str]]:
     """检查重名，返回 (name, path1, path2) 列表"""
     seen: dict[str, str] = {}
@@ -466,12 +475,74 @@ def ask_confirmation(auto_confirm: bool) -> bool:
 
 
 # ============================================================
+# 删除功能
+# ============================================================
+
+def execute_delete(skill_name: str, source_dir: Path, targets: list[Path], auto_confirm: bool):
+    """删除指定 skill（从源目录和所有目标目录）"""
+    print(f"========================================")
+    print(f"  删除 Skill: {skill_name}")
+    print(f"========================================\n")
+
+    # 检查 skill 是否存在
+    source_rel = find_skill_in_source_by_name(source_dir, skill_name)
+    target_dirs_with_skill = find_skill_in_targets(targets, skill_name)
+
+    if not source_rel and not target_dirs_with_skill:
+        log_error(f"skill '{skill_name}' 在源目录和所有目标目录中都不存在")
+        sys.exit(1)
+
+    # 预览删除
+    print(f"{Color.BOLD}将要删除以下位置的 skill '{skill_name}':{Color.NC}\n")
+
+    deleted_count = 0
+
+    if source_rel:
+        print(f"  {Color.RED}-{Color.NC} 源目录: {source_dir / source_rel}")
+        deleted_count += 1
+
+    for target_dir in target_dirs_with_skill:
+        print(f"  {Color.RED}-{Color.NC} 目标目录: {target_dir / skill_name}")
+        deleted_count += 1
+
+    print()
+
+    if deleted_count == 0:
+        log_error(f"skill '{skill_name}' 不存在")
+        sys.exit(1)
+
+    # 确认
+    if not ask_confirmation(auto_confirm):
+        return
+
+    # 执行删除
+    log_info("========== 开始删除 ==========")
+    print(file=sys.stderr)
+
+    actual_deleted = 0
+
+    if source_rel:
+        shutil.rmtree(source_dir / source_rel)
+        log_success(f"  已从源目录删除: {source_rel}")
+        actual_deleted += 1
+
+    for target_dir in target_dirs_with_skill:
+        shutil.rmtree(target_dir / skill_name)
+        log_success(f"  已从目标目录删除: {target_dir / skill_name}")
+        actual_deleted += 1
+
+    print(file=sys.stderr)
+    log_success(f"删除完成: 共删除 {actual_deleted} 个位置")
+
+
+# ============================================================
 # CLI
 # ============================================================
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Skills 同步工具")
     parser.add_argument("--force", "-f", action="store_true", help="强制同步模式（以源目录为准）")
+    parser.add_argument("--delete", "-d", type=str, metavar="SKILL_NAME", help="删除指定的 skill（从源目录和所有目标目录）")
     parser.add_argument("-y", "--yes", action="store_true", help="跳过确认")
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE, help="源目录路径")
     parser.add_argument("--targets", type=str, default=None, help="目标目录路径，逗号分隔")
@@ -490,6 +561,11 @@ def main(argv: list[str] | None = None):
     source_dir: Path = args.source
     targets: list[Path] = args.targets
     force: bool = args.force
+
+    # 删除模式
+    if args.delete:
+        execute_delete(args.delete, source_dir, targets, args.yes)
+        return
 
     mode = "强制模式" if force else "双向模式"
     print(f"========================================")

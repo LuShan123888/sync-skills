@@ -10,8 +10,10 @@ from sync_skills import (
     SyncPlan,
     check_duplicate_names,
     execute_bidirectional,
+    execute_delete,
     execute_force,
     find_skill_in_source_by_name,
+    find_skill_in_targets,
     find_skills_in_source,
     find_skills_in_target,
     main,
@@ -432,6 +434,95 @@ class TestMultiTarget:
         # 交叉分发
         assert (target_a / "new-from-b" / "SKILL.md").is_file()
         assert (target_b / "new-from-a" / "SKILL.md").is_file()
+
+
+# ============================================================
+# 删除功能测试
+# ============================================================
+
+
+class TestDelete:
+    """测试 delete 命令"""
+
+    def test_delete_skill_from_all_locations(self, env):
+        """skill 存在于源和所有目标 → 全部删除"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "to-delete", "del")
+        create_skill(target_a, "to-delete", "del")
+        create_skill(target_b, "to-delete", "del")
+
+        # 执行删除
+        execute_delete("to-delete", source, [target_a, target_b], auto_confirm=True)
+
+        # 源和目标都应被删除
+        assert not (source / "Code" / "to-delete").exists()
+        assert not (target_a / "to-delete").exists()
+        assert not (target_b / "to-delete").exists()
+
+    def test_delete_skill_partial_exist(self, env):
+        """skill 只存在于部分位置 → 删除存在的，忽略不存在的"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "partial-skill", "p")
+        create_skill(target_a, "partial-skill", "p")
+        # target_b 没有
+
+        execute_delete("partial-skill", source, [target_a, target_b], auto_confirm=True)
+
+        assert not (source / "Code" / "partial-skill").exists()
+        assert not (target_a / "partial-skill").exists()
+        # target_b 本来就没有，不报错
+
+    def test_delete_nonexistent_skill(self, env):
+        """skill 不存在 → 报错退出"""
+        source, target_a, target_b = env
+
+        with pytest.raises(SystemExit):
+            execute_delete("nonexistent", source, [target_a, target_b], auto_confirm=True)
+
+    def test_delete_only_in_targets(self, env):
+        """skill 只在目标目录存在，源目录不存在 → 删除所有目标中的 skill"""
+        source, target_a, target_b = env
+        create_skill(target_a, "only-in-targets", "t")
+        create_skill(target_b, "only-in-targets", "t")
+
+        execute_delete("only-in-targets", source, [target_a, target_b], auto_confirm=True)
+
+        assert not (target_a / "only-in-targets").exists()
+        assert not (target_b / "only-in-targets").exists()
+
+    def test_delete_with_other_skills_untouched(self, env):
+        """删除一个 skill 不影响其他 skill"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "to-delete", "del")
+        create_skill_in_category(source, "Code", "keep-me", "keep")
+        create_skill(target_a, "to-delete", "del")
+        create_skill(target_a, "keep-me", "keep")
+        create_skill(target_b, "to-delete", "del")
+        create_skill(target_b, "keep-me", "keep")
+
+        execute_delete("to-delete", source, [target_a, target_b], auto_confirm=True)
+
+        # to-delete 被删除
+        assert not (source / "Code" / "to-delete").exists()
+        assert not (target_a / "to-delete").exists()
+        assert not (target_b / "to-delete").exists()
+        # keep-me 保持不变
+        assert (source / "Code" / "keep-me" / "SKILL.md").read_text() == "keep"
+        assert (target_a / "keep-me" / "SKILL.md").read_text() == "keep"
+        assert (target_b / "keep-me" / "SKILL.md").read_text() == "keep"
+
+    def test_find_skill_in_targets(self, env):
+        """测试辅助函数 find_skill_in_targets"""
+        source, target_a, target_b = env
+        create_skill(target_a, "skill-a")
+        create_skill(target_b, "skill-b")
+
+        # skill-a 只在 target_a
+        assert find_skill_in_targets([target_a, target_b], "skill-a") == [target_a]
+        # skill-b 只在 target_b
+        assert find_skill_in_targets([target_a, target_b], "skill-b") == [target_b]
+        # skill-c 不存在
+        assert find_skill_in_targets([target_a, target_b], "skill-c") == []
 
 
 # ============================================================
