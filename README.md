@@ -81,6 +81,10 @@ sync-skills
 # Force: source is truth, remove extras from targets
 sync-skills --force
 
+# 删除指定 skill：从源目录和所有目标目录中删除
+# Delete a skill: remove from source and all targets
+sync-skills --delete skill-name
+
 # 跳过确认 / Skip confirmation
 sync-skills -y
 
@@ -114,6 +118,7 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 | 参数 | 说明 |
 |------|------|
 | `--force`, `-f` | 强制同步（源 → 目标单向，删除多余） |
+| `--delete NAME`, `-d NAME` | 删除指定 skill（从源目录和所有目标目录） |
 | `-y`, `--yes` | 跳过确认提示 |
 | `--source DIR` | 源目录路径（默认 `~/Skills`） |
 | `--targets DIR1,DIR2` | 目标目录，逗号分隔 |
@@ -142,7 +147,7 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 ## 开发 / Development
 
 ```bash
-uv run pytest tests/ -v    # 运行测试（26 个用例）
+uv run pytest tests/ -v    # 运行测试（46 个用例）
 ```
 
 ## License
@@ -194,6 +199,9 @@ sync-skills
 # Force sync: source is the single source of truth
 sync-skills --force
 
+# Delete a skill: remove from source and all targets
+sync-skills --delete skill-name
+
 # Skip confirmation
 sync-skills -y
 
@@ -215,6 +223,7 @@ Source directory is the single source of truth. Adds missing skills, removes ext
 | Flag | Description |
 |------|-------------|
 | `--force`, `-f` | Force sync (source → targets, removes extras) |
+| `--delete NAME`, `-d NAME` | Delete a skill (from source and all targets) |
 | `-y`, `--yes` | Skip confirmation |
 | `--source DIR` | Source directory (default: `~/Skills`) |
 | `--targets DIR1,DIR2` | Target directories, comma-separated |
