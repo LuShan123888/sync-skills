@@ -103,11 +103,14 @@ def skill_dir_hash(skill_path: Path) -> str:
 
 
 def find_skills_in_source(source_dir: Path) -> list[Skill]:
-    """扫描源目录，返回所有 skill（支持嵌套分类）"""
+    """扫描源目录，返回所有 skill（支持嵌套分类，跳过隐藏目录）"""
     skills = []
     if not source_dir.is_dir():
         return skills
     for skill_md in source_dir.rglob("SKILL.md"):
+        # 跳过隐藏目录（如 .system/）
+        if any(part.startswith(".") for part in skill_md.relative_to(source_dir).parent.parts):
+            continue
         skill_dir = skill_md.parent
         rel_path = str(skill_dir.relative_to(source_dir))
         skills.append(Skill(name=skill_dir.name, rel_path=rel_path))
@@ -115,18 +118,30 @@ def find_skills_in_source(source_dir: Path) -> list[Skill]:
 
 
 def find_skills_in_target(target_dir: Path) -> list[str]:
-    """扫描目标目录，返回所有 skill 名称（平铺结构）"""
+    """扫描目标目录，返回所有 skill 名称（扁平扫描，跳过隐藏目录）"""
     if not target_dir.is_dir():
         return []
     return [
         d.name for d in target_dir.iterdir()
-        if d.is_dir() and (d / "SKILL.md").is_file()
+        if d.is_dir() and not d.name.startswith(".") and (d / "SKILL.md").is_file()
     ]
 
 
+def find_skill_path(target_dir: Path, name: str) -> Path | None:
+    """在目标目录中查找 skill 的实际路径（扁平扫描，跳过隐藏目录），返回 skill 目录或 None"""
+    if not target_dir.is_dir():
+        return None
+    skill_dir = target_dir / name
+    if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
+        return skill_dir
+    return None
+
+
 def find_skill_in_source_by_name(source_dir: Path, name: str) -> str | None:
-    """在源目录中查找指定名称的 skill，返回相对路径"""
+    """在源目录中查找指定名称的 skill，返回相对路径（跳过隐藏目录）"""
     for skill_md in source_dir.rglob("SKILL.md"):
+        if any(part.startswith(".") for part in skill_md.relative_to(source_dir).parent.parts):
+            continue
         if skill_md.parent.name == name:
             return str(skill_md.parent.relative_to(source_dir))
     return None
@@ -136,8 +151,10 @@ def find_skill_in_targets(targets: list[Path], name: str) -> list[Path]:
     """在所有目标目录中查找指定名称的 skill，返回包含该 skill 的目标目录列表"""
     result = []
     for target_dir in targets:
-        if target_dir.is_dir() and (target_dir / name).is_dir() and (target_dir / name / "SKILL.md").is_file():
-            result.append(target_dir)
+        if target_dir.is_dir():
+            path = find_skill_path(target_dir, name)
+            if path:
+                result.append(target_dir)
     return result
 
 
@@ -529,9 +546,11 @@ def execute_force(plan: SyncPlan, source_dir: Path, targets: list[Path]):
         target_dir.mkdir(parents=True, exist_ok=True)
 
         for name, _ in dir_deletes:
-            shutil.rmtree(target_dir / name)
-            log_warning(f"  删除: {name}")
-            total_deleted += 1
+            skill_path = find_skill_path(target_dir, name)
+            if skill_path:
+                shutil.rmtree(skill_path)
+                log_warning(f"  删除: {name}")
+                total_deleted += 1
 
         for name, _ in dir_creates:
             rel_path = source_map.get(name)
@@ -540,7 +559,9 @@ def execute_force(plan: SyncPlan, source_dir: Path, targets: list[Path]):
                 total_created += 1
 
         for name, source_rel, _ in dir_updates:
-            shutil.rmtree(target_dir / name)
+            skill_path = find_skill_path(target_dir, name)
+            if skill_path:
+                shutil.rmtree(skill_path)
             shutil.copytree(source_dir / source_rel, target_dir / name, copy_function=shutil.copy2)
             total_updated += 1
 
@@ -603,7 +624,7 @@ def verify_sync(source_dir: Path, targets: list[Path]) -> bool:
 
 
 # ============================================================
-# 用户确认
+# 用户确认与目录选择
 # ============================================================
 
 def ask_confirmation(auto_confirm: bool) -> bool:
@@ -624,6 +645,81 @@ def ask_confirmation(auto_confirm: bool) -> bool:
         return True
     log_warning("用户取消操作")
     return False
+
+
+def show_overview(source_dir: Path, targets: list[Path], alias_map: dict[Path, str]):
+    """展示所有目录的当前状态概览，帮助用户选择基准目录。"""
+    print(f"{Color.BOLD}--- 目录概览 ---{Color.NC}\n")
+
+    # 收集所有目录的 skill 集合和哈希
+    all_dirs = [source_dir] + targets
+    dir_skills: dict[Path, dict[str, str]] = {}  # dir -> {skill_name: hash}
+    for d in all_dirs:
+        if not d.is_dir():
+            continue
+        dir_skills[d] = {}
+        if d == source_dir:
+            for skill in find_skills_in_source(d):
+                dir_skills[d][skill.name] = skill_dir_hash(d / skill.rel_path)
+        else:
+            for name in find_skills_in_target(d):
+                dir_skills[d][name] = skill_dir_hash(d / name)
+
+    # 展示每个目录
+    for i, d in enumerate(all_dirs):
+        alias = alias_map.get(d, _short_path(d))
+        skills = dir_skills.get(d, {})
+        count = len(skills)
+
+        # 统计与源不一致的数量
+        if d == source_dir:
+            print(f"  {Color.CYAN}[{i}]{Color.NC} {alias:<20} {count} skills")
+        else:
+            source_hashes = dir_skills.get(source_dir, {})
+            mismatch = sum(1 for name, h in skills.items()
+                           if name in source_hashes and h != source_hashes[name])
+            only_in_target = sum(1 for name in skills if name not in source_hashes)
+            parts = []
+            if mismatch:
+                parts.append(f"{mismatch}个与源不一致")
+            if only_in_target:
+                parts.append(f"{only_in_target}个仅此目录有")
+            detail = f" ({', '.join(parts)})" if parts else ""
+            if mismatch or only_in_target:
+                print(f"  {Color.CYAN}[{i}]{Color.NC} {alias:<20} {count} skills{Color.YELLOW}{detail}{Color.NC}")
+            else:
+                print(f"  {Color.CYAN}[{i}]{Color.NC} {alias:<20} {count} skills{Color.GREEN} ✓{Color.NC}")
+
+    print()
+
+
+def ask_base_selection(all_dirs: list[tuple[Path, str]]) -> Path | None:
+    """让用户选择基准目录，返回选中的 Path 或 None（取消）。"""
+    print(f"{Color.BOLD}========================================{Color.NC}")
+    try:
+        answer = input(f"{Color.YELLOW}请选择基准目录 (输入编号，q 取消): {Color.NC}")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        log_warning("用户取消操作")
+        return None
+
+    answer = answer.strip()
+    if answer.lower() in ("q", "n", "quit", "exit"):
+        log_warning("用户取消操作")
+        return None
+
+    try:
+        idx = int(answer)
+        if 0 <= idx < len(all_dirs):
+            selected_path, alias = all_dirs[idx]
+            print()
+            log_info(f"已选择基准目录: {alias} ({_short_path(selected_path)})")
+            return selected_path
+    except ValueError:
+        pass
+
+    log_error(f"无效输入: {answer}，请输入 0-{len(all_dirs) - 1} 之间的数字")
+    return None
 
 
 # ============================================================
@@ -693,7 +789,7 @@ def execute_delete(skill_name: str, source_dir: Path, targets: list[Path], auto_
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Skills 同步工具")
-    parser.add_argument("--force", "-f", action="store_true", help="强制同步模式（以源目录为准）")
+    parser.add_argument("--force", "-f", action="store_true", help="强制同步模式（可选择任意目录为基准同步到其他目录）")
     parser.add_argument("--delete", "-d", type=str, metavar="SKILL_NAME", help="删除指定的 skill（从源目录和所有目标目录）")
     parser.add_argument("-y", "--yes", action="store_true", help="跳过确认")
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE, help="源目录路径")
@@ -744,21 +840,37 @@ def main(argv: list[str] | None = None):
         log_error("请先重命名重复的 skill，再重新执行同步")
         sys.exit(1)
 
-    # 预览
-    plan = preview_force(source_dir, targets) if force else preview_bidirectional(source_dir, targets)
-
-    if not show_preview(plan, source_dir, targets, force):
-        log_success("无需同步")
-        return
-
-    # 确认
-    if not ask_confirmation(args.yes):
-        return
-
-    # 执行
+    # 预览与执行
     if force:
-        stats = execute_force(plan, source_dir, targets)
-        verify_sync(source_dir, targets)
+        alias_map = _build_alias_map(source_dir, targets)
+        all_dirs_with_alias = [(source_dir, "源")] + [(t, t.parent.name) for t in targets]
+
+        # 1. 展示目录概览
+        show_overview(source_dir, targets, alias_map)
+
+        # 2. 选择基准目录
+        if args.yes:
+            base_dir = source_dir
+        else:
+            base_dir = ask_base_selection(all_dirs_with_alias)
+            if base_dir is None:
+                return
+
+        # 3. 以基准为源，其他所有目录为目标
+        other_dirs = [d for d in [source_dir] + targets if d != base_dir]
+        plan = preview_force(base_dir, other_dirs)
+
+        if not show_preview(plan, base_dir, other_dirs, force=True):
+            log_success("无需同步")
+            return
+
+        # 4. 确认
+        if not ask_confirmation(args.yes):
+            return
+
+        # 5. 执行
+        stats = execute_force(plan, base_dir, other_dirs)
+        verify_sync(base_dir, other_dirs)
         print("========================================")
         print("  同步完成")
         print("========================================")
@@ -766,6 +878,15 @@ def main(argv: list[str] | None = None):
         print(f"{Color.YELLOW}覆盖: {stats['updated']} 个{Color.NC}")
         print(f"{Color.RED}删除: {stats['deleted']} 个{Color.NC}")
     else:
+        plan = preview_bidirectional(source_dir, targets)
+
+        if not show_preview(plan, source_dir, targets, force=False):
+            log_success("无需同步")
+            return
+
+        if not ask_confirmation(args.yes):
+            return
+
         stats = execute_bidirectional(plan, source_dir, targets)
         verify_sync(source_dir, targets)
         print("========================================")

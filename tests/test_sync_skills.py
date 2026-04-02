@@ -8,6 +8,7 @@ import pytest
 
 from sync_skills import (
     SyncPlan,
+    ask_base_selection,
     check_duplicate_names,
     execute_bidirectional,
     execute_delete,
@@ -19,6 +20,7 @@ from sync_skills import (
     main,
     preview_bidirectional,
     preview_force,
+    show_overview,
     skill_dir_hash,
 )
 
@@ -815,3 +817,101 @@ class TestUserScenarios:
         run_main(source, [target_a, target_b])
         output = capsys.readouterr()
         assert "无需同步" in output.err
+
+
+# ============================================================
+# 基准目录选择测试
+# ============================================================
+
+
+class TestBaseSelection:
+    """测试 force 模式下选择基准目录的功能"""
+
+    def test_force_with_target_as_base(self, env, capsys):
+        """以目标目录为基准同步到源和其他目标"""
+        source, target_a, target_b = env
+        # 源有旧版本
+        create_skill_in_category(source, "Code", "skill-a", "old-source")
+        # target_a 有新版本（作为基准）
+        create_skill(target_a, "skill-a", "new-version")
+        # target_b 有旧版本
+        create_skill(target_b, "skill-a", "old-target")
+
+        # 以 target_a 为基准，同步到 source 和 target_b
+        plan = preview_force(target_a, [source, target_b])
+        execute_force(plan, target_a, [source, target_b])
+
+        # source 作为目标时按扁平结构写入
+        assert (source / "skill-a" / "SKILL.md").read_text() == "new-version"
+        # target_b 也被覆盖为新版本
+        assert (target_b / "skill-a" / "SKILL.md").read_text() == "new-version"
+
+    def test_force_base_syncs_to_source(self, env):
+        """以目标为基准时，源目录也被视为目标，会被同步"""
+        source, target_a, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "v1")
+        create_skill_in_category(source, "Code", "skill-b", "v1")
+        # target_a 有 skill-a 的新版本 + skill-c
+        create_skill(target_a, "skill-a", "v2")
+        create_skill(target_a, "skill-c", "v1")
+
+        plan = preview_force(target_a, [source])
+        execute_force(plan, target_a, [source])
+
+        # source 作为目标时按扁平结构处理
+        assert (source / "skill-a" / "SKILL.md").read_text() == "v2"
+        assert not (source / "skill-b").exists()
+        assert (source / "skill-c" / "SKILL.md").is_file()
+
+    def test_force_y_still_defaults_to_source(self, env, capsys):
+        """-y 模式下 force 仍默认以源为基准"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "source-ver")
+        create_skill(target_a, "skill-a", "source-ver")
+        create_skill(target_b, "skill-a", "source-ver")
+
+        run_main(source, [target_a, target_b], force=True)
+        captured = capsys.readouterr()
+        # -y 模式不应出现选择基准目录的提示
+        assert "请选择基准目录" not in captured.out
+        assert "请选择基准目录" not in captured.err
+
+    def test_show_overview_displays_mismatch(self, env, capsys):
+        """概览应展示不一致数量"""
+        source, target_a, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "same")
+        create_skill_in_category(source, "Code", "skill-b", "diff")
+        create_skill(target_a, "skill-a", "same")
+        create_skill(target_a, "skill-b", "different")
+
+        from sync_skills import _build_alias_map
+        alias_map = _build_alias_map(source, [target_a])
+        show_overview(source, [target_a], alias_map)
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "目录概览" in combined
+        assert "不一致" in combined
+
+    def test_ask_base_selection_valid(self, env, monkeypatch):
+        """输入有效数字应返回对应目录"""
+        source, target_a, target_b = env
+        all_dirs = [(source, "源"), (target_a, "target_a"), (target_b, "target_b")]
+        monkeypatch.setattr("builtins.input", lambda _: "1")
+        result = ask_base_selection(all_dirs)
+        assert result == target_a
+
+    def test_ask_base_selection_cancel(self, env, monkeypatch):
+        """输入 q 应返回 None"""
+        source, target_a, _ = env
+        all_dirs = [(source, "源"), (target_a, "target_a")]
+        monkeypatch.setattr("builtins.input", lambda _: "q")
+        result = ask_base_selection(all_dirs)
+        assert result is None
+
+    def test_ask_base_selection_invalid(self, env, monkeypatch, capsys):
+        """输入无效值应返回 None"""
+        source, target_a, _ = env
+        all_dirs = [(source, "源"), (target_a, "target_a")]
+        monkeypatch.setattr("builtins.input", lambda _: "abc")
+        result = ask_base_selection(all_dirs)
+        assert result is None

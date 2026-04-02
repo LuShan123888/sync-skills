@@ -16,7 +16,7 @@ uv sync                          # install dependencies
 
 ## Architecture
 
-Single-file CLI tool (`sync_skills.py`, ~630 lines, zero external dependencies) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
+Single-file CLI tool (`sync_skills.py`, ~800 lines, zero external dependencies) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
 
 ### Core flow: Plan → Preview → Confirm → Execute → Verify
 
@@ -32,7 +32,7 @@ Single-file CLI tool (`sync_skills.py`, ~630 lines, zero external dependencies) 
 - **Source** (`~/Skills/`): nested category structure (e.g., `Code/skill-a/`, `Lark/skill-b/`)
 - **Targets** (flat): each tool's skills dir. Categories are flattened — only the leaf directory name matters
 - **Bidirectional mode**: collects new/updated skills from targets into `~/Skills/Other/`, then distributes all skills to targets
-- **Force mode**: source is truth — adds missing, deletes extras, never modifies source
+- **Force mode**: source is truth — adds missing, deletes extras, never modifies source. Supports interactive base directory selection (`--force` without `-y`)
 - Duplicate skill names across categories are a fatal error (would conflict when flattened)
 
 ### Conflict handling (core design principle)
@@ -46,7 +46,7 @@ Single-file CLI tool (`sync_skills.py`, ~630 lines, zero external dependencies) 
 
 ### Test structure
 
-Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation. 46 tests total.
+Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`, `TestBaseSelection`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation. 59 tests total.
 
 ### Delete command
 
