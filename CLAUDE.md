@@ -112,7 +112,7 @@ path = "~/.claude/skills"
 See `docs/DESIGN.md` for:
 - 用户场景与预期行为（第 3 节）— 所有同步场景的完整定义
 - 当前已知限制（第 4 节）
-- 演进规划（第 5 节）— Phase 1: PyPI 发布 + 配置化
+- 演进规划（第 5 节）— Phase 2: 内容哈希 + 状态快照
 - 变更日志（第 7 节）— 每次讨论的关键决策和代码变更记录
 
 ## Cross-session workflow
@@ -126,5 +126,6 @@ See `docs/DESIGN.md` for:
 
 ## Current status
 
-- **版本**: v0.2.0（src/ 布局，配置化，init 向导，PyPI 就绪）
-- **Phase 1 已完成**: src/sync_skills/ 包结构、config.py、init 向导、hatchling 打包
+- **版本**: v0.2.0（src/ 布局，配置化，init 向导，已发布 PyPI）
+- **Phase 1 已完成**: src/sync_skills/ 包结构、config.py、init 向导、hatchling 打包、GitHub Actions 自动发布
+- **下一步**: Phase 2 — 内容哈希（SHA-256）+ 状态快照替代 mtime
