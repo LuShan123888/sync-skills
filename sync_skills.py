@@ -9,9 +9,11 @@
 """
 
 import argparse
+import hashlib
 import shutil
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 # ============================================================
@@ -42,12 +44,13 @@ class SyncPlan:
     # 分发阶段
     creates: list[tuple[str, Path]] = field(default_factory=list)    # (skill_name, target_dir)
     deletes: list[tuple[str, Path]] = field(default_factory=list)    # (skill_name, target_dir)
+    updates: list[tuple[str, str, Path]] = field(default_factory=list)  # (skill_name, source_rel, target_dir)
     # 警告（不阻塞同步，仅提示用户）
     warnings: list[str] = field(default_factory=list)
 
     @property
     def has_changes(self) -> bool:
-        return bool(self.collect_new or self.collect_update or self.creates or self.deletes)
+        return bool(self.collect_new or self.collect_update or self.creates or self.deletes or self.updates)
 
     @property
     def has_warnings(self) -> bool:
@@ -85,8 +88,19 @@ def log_error(msg: str):
 
 
 # ============================================================
-# 扫描函数
+# 扫描与哈希
 # ============================================================
+
+def skill_dir_hash(skill_path: Path) -> str:
+    """计算 skill 目录所有文件的 MD5 哈希值，用于判断内容是否一致。忽略隐藏文件（如 .DS_Store）。"""
+    h = hashlib.md5()
+    for file_path in sorted(skill_path.rglob("*")):
+        if file_path.is_file() and not file_path.name.startswith("."):
+            rel = file_path.relative_to(skill_path)
+            h.update(str(rel).encode())
+            h.update(file_path.read_bytes())
+    return h.hexdigest()
+
 
 def find_skills_in_source(source_dir: Path) -> list[Skill]:
     """扫描源目录，返回所有 skill（支持嵌套分类）"""
@@ -143,13 +157,106 @@ def check_duplicate_names(skills: list[Skill]) -> list[tuple[str, str, str]]:
 # 预览阶段
 # ============================================================
 
+def _short_path(p: Path) -> str:
+    """用 ~ 缩写 HOME 目录"""
+    try:
+        return f"~/{p.relative_to(Path.home())}"
+    except ValueError:
+        return str(p)
+
+
+def _build_alias_map(source_dir: Path, targets: list[Path]) -> dict[Path, str]:
+    """为源目录和目标目录构建别名映射。"""
+    alias_map: dict[Path, str] = {}
+    # 源目录别名
+    alias_map[source_dir] = "源"
+    # 目标目录别名：取父目录名（如 ~/.claude/skills → "claude"）
+    for target_dir in targets:
+        alias_map[target_dir] = target_dir.parent.name
+    return alias_map
+
+
+def _alias_of(p: Path, alias_map: dict[Path, str]) -> str:
+    """根据路径找到所属的根目录别名，找不到则返回短路径。"""
+    for root, alias in alias_map.items():
+        try:
+            p.relative_to(root)
+            return alias
+        except ValueError:
+            continue
+    return _short_path(p)
+
+
+def _fmt_time(mtime: float) -> str:
+    """格式化 mtime 为可读时间"""
+    return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _build_version_warning(
+    skill_name: str, source_dir: Path, source_rel: str, source_mtime: float,
+    targets_info: list[tuple[Path, str, float]],
+    alias_map: dict[Path, str],
+    targets: list[Path],
+) -> str:
+    """为内容不一致的 skill 构建多行详细警告，按哈希分组展示所有版本。"""
+    # 按 hash 分组所有位置（源 + 所有包含该 skill 的目标）
+    versions: dict[str, list[tuple[Path, float, bool]]] = {}
+    source_path = source_dir / source_rel
+    source_hash = skill_dir_hash(source_path)
+    versions.setdefault(source_hash, []).append((source_path, source_mtime, True))
+
+    # 添加所有不一致的目标（已有记录）
+    for target_dir, _, target_mtime in targets_info:
+        versions.setdefault(skill_dir_hash(target_dir / skill_name), []).append(
+            (target_dir / skill_name, target_mtime, False)
+        )
+    # 补充一致的目标（不在 targets_info 中但包含该 skill 且哈希匹配的）
+    mismatch_dirs = {t for t, _, _ in targets_info}
+    for target_dir in targets:
+        if target_dir in mismatch_dirs or not target_dir.is_dir():
+            continue
+        skill_path = target_dir / skill_name
+        if skill_path.is_dir() and (skill_path / "SKILL.md").is_file():
+            target_hash = skill_dir_hash(skill_path)
+            versions.setdefault(target_hash, []).append(
+                (skill_path, (skill_path / "SKILL.md").stat().st_mtime, False)
+            )
+
+    # 按最新 mtime 降序排列
+    sorted_versions = sorted(
+        versions.items(),
+        key=lambda kv: max(m for _, m, _ in kv[1]),
+        reverse=True,
+    )
+
+    lines = [f"skill '{skill_name}' 内容不一致，请手动处理"]
+    for i, (_, locations) in enumerate(sorted_versions):
+        max_mtime = max(m for _, m, _ in locations)
+        has_source = any(is_src for _, _, is_src in locations)
+        loc_names = ", ".join(_alias_of(p, alias_map) for p, _, _ in locations)
+
+        if i == 0:
+            label = "★ 建议版本"
+        else:
+            label = f"版本{i + 1}"
+
+        suffix = " (含源)" if has_source else ""
+        lines.append(f"  {label}{suffix} — {len(locations)}处一致, 最新修改: {_fmt_time(max_mtime)}")
+        lines.append(f"    {loc_names}")
+
+    return "\n".join(lines)
+
+
 def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
     plan = SyncPlan()
+    alias_map = _build_alias_map(source_dir, targets)
 
     # 阶段1：收集新增/修改的 skills
-    # 按 skill 分组记录：哪些目标有修改，源是否也有修改
-    target_updated: dict[str, list[Path]] = {}     # skill_name -> [修改过的 target_dirs]
-    source_also_changed: set[str] = set()           # 源也修改过的 skill 名称
+    target_updated: dict[str, list[Path]] = {}     # skill_name -> [target mtime > source mtime 的目标]
+    source_also_changed: set[str] = set()           # 源 mtime >= target mtime 的 skill 名称
+    # 记录不一致 skill 的版本详情，用于生成详细警告
+    skill_versions: dict[str, tuple[str, float, list[tuple[Path, str, float]]]] = {}
+    # skill_name -> (source_rel, source_mtime, [(target_dir, target_hash, target_mtime), ...])
 
     for target_dir in targets:
         if not target_dir.is_dir():
@@ -160,14 +267,24 @@ def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
                 plan.collect_new.append((skill_name, target_dir))
                 continue
 
-            source_skill = source_dir / source_rel / "SKILL.md"
-            target_skill = target_dir / skill_name / "SKILL.md"
-            if source_skill.read_bytes() == target_skill.read_bytes():
+            # 比较目录哈希，判断内容是否一致
+            source_hash = skill_dir_hash(source_dir / source_rel)
+            target_hash = skill_dir_hash(target_dir / skill_name)
+            if source_hash == target_hash:
                 continue
 
-            # 内容不同，记录修改来源
-            target_is_newer = target_skill.stat().st_mtime > source_skill.stat().st_mtime
-            if target_is_newer:
+            # 记录版本详情
+            if skill_name not in skill_versions:
+                source_skill = source_dir / source_rel / "SKILL.md"
+                skill_versions[skill_name] = (source_rel, source_skill.stat().st_mtime, [])
+            skill_versions[skill_name][2].append(
+                (target_dir, target_hash, (target_dir / skill_name / "SKILL.md").stat().st_mtime)
+            )
+
+            # 基于 SKILL.md mtime 判断修改来源
+            source_mtime = skill_versions[skill_name][1]
+            target_mtime = skill_versions[skill_name][2][-1][2]
+            if target_mtime > source_mtime:
                 target_updated.setdefault(skill_name, []).append(target_dir)
             else:
                 source_also_changed.add(skill_name)
@@ -175,20 +292,19 @@ def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
     # 分析冲突：遍历所有有变更的 skill，决定动作
     all_changed_skills = set(target_updated.keys()) | source_also_changed
     for skill_name in sorted(all_changed_skills):
-        source_rel = find_skill_in_source_by_name(source_dir, skill_name)
+        source_rel, source_mtime, targets_info = skill_versions[skill_name]
         modified_targets = target_updated.get(skill_name, [])
         source_changed = skill_name in source_also_changed
 
         # 情况1: 多个目标都修改了 → 冲突
         if len(modified_targets) > 1:
-            dirs_str = ", ".join(str(d) for d in modified_targets)
             plan.warnings.append(
-                f"skill '{skill_name}' 在多个目标目录中被修改 ({dirs_str})，已跳过自动合并，请手动处理"
+                _build_version_warning(skill_name, source_dir, source_rel, source_mtime, targets_info, alias_map, targets)
             )
         # 情况2: 源和目标都修改了 → 冲突
         elif modified_targets and source_changed:
             plan.warnings.append(
-                f"skill '{skill_name}' 在源目录和目标目录 ({modified_targets[0]}) 中都被修改，已跳过自动合并，请手动处理"
+                _build_version_warning(skill_name, source_dir, source_rel, source_mtime, targets_info, alias_map, targets)
             )
         # 情况3: 仅目标修改了 → 安全收集
         elif modified_targets:
@@ -196,7 +312,7 @@ def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
         # 情况4: 仅源修改了 → 提示用 --force
         else:
             plan.warnings.append(
-                f"skill '{skill_name}' 在源目录有更新，但双向模式不会自动覆盖目标，请使用 --force 同步"
+                _build_version_warning(skill_name, source_dir, source_rel, source_mtime, targets_info, alias_map, targets)
             )
 
     # 阶段2：计算分发变更
@@ -219,7 +335,8 @@ def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
 def preview_force(source_dir: Path, targets: list[Path]) -> SyncPlan:
     plan = SyncPlan()
     source_skills = find_skills_in_source(source_dir)
-    source_names = {s.name for s in source_skills}
+    source_map = {s.name: s.rel_path for s in source_skills}
+    source_names = set(source_map.keys())
 
     for target_dir in targets:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -229,6 +346,12 @@ def preview_force(source_dir: Path, targets: list[Path]) -> SyncPlan:
             plan.deletes.append((name, target_dir))
         for name in source_names - target_names:
             plan.creates.append((name, target_dir))
+        # 同名但内容不同 → 覆盖
+        for name in source_names & target_names:
+            source_hash = skill_dir_hash(source_dir / source_map[name])
+            target_hash = skill_dir_hash(target_dir / name)
+            if source_hash != target_hash:
+                plan.updates.append((name, source_map[name], target_dir))
 
     return plan
 
@@ -263,7 +386,11 @@ def show_preview(plan: SyncPlan, source_dir: Path, targets: list[Path], force: b
     if plan.warnings:
         print(f"{Color.BOLD}--- 注意 ---{Color.NC}\n")
         for warning in plan.warnings:
-            print(f"  {Color.YELLOW}⚠ {warning}{Color.NC}")
+            for i, line in enumerate(warning.split("\n")):
+                if i == 0:
+                    print(f"  {Color.YELLOW}⚠ {line}{Color.NC}")
+                else:
+                    print(f"  {Color.YELLOW}  {line}{Color.NC}")
         print()
 
     if not plan.has_changes:
@@ -285,15 +412,16 @@ def show_preview(plan: SyncPlan, source_dir: Path, targets: list[Path], force: b
             print()
 
     # 阶段2/分发：按目标目录分组
-    if plan.creates or plan.deletes:
+    if plan.creates or plan.deletes or plan.updates:
         if not force:
             print(f"{Color.BOLD}--- 阶段2：分发（源 → 目标）---{Color.NC}\n")
 
         for target_dir in targets:
             dir_creates = [n for n, d in plan.creates if d == target_dir]
             dir_deletes = [n for n, d in plan.deletes if d == target_dir]
+            dir_updates = [(n, r) for n, r, d in plan.updates if d == target_dir]
 
-            if not dir_creates and not dir_deletes:
+            if not dir_creates and not dir_deletes and not dir_updates:
                 print(f"  {Color.BOLD}{target_dir}{Color.NC}  {Color.GREEN}✓ 无变更{Color.NC}")
                 continue
 
@@ -302,6 +430,10 @@ def show_preview(plan: SyncPlan, source_dir: Path, targets: list[Path], force: b
                 print(f"    {Color.GREEN}新增 ({len(dir_creates)}):{Color.NC}")
                 for name in dir_creates:
                     print(f"      {Color.GREEN}+{Color.NC} {name}")
+            if dir_updates:
+                print(f"    {Color.YELLOW}覆盖 ({len(dir_updates)}):{Color.NC}")
+                for name, source_rel in dir_updates:
+                    print(f"      {Color.YELLOW}~{Color.NC} {name}  ← {source_rel}")
             if dir_deletes:
                 print(f"    {Color.RED}删除 ({len(dir_deletes)}):{Color.NC}")
                 for name in dir_deletes:
@@ -382,12 +514,14 @@ def execute_force(plan: SyncPlan, source_dir: Path, targets: list[Path]):
 
     total_created = 0
     total_deleted = 0
+    total_updated = 0
 
     for target_dir in targets:
         dir_creates = [(n, d) for n, d in plan.creates if d == target_dir]
         dir_deletes = [(n, d) for n, d in plan.deletes if d == target_dir]
+        dir_updates = [(n, r, d) for n, r, d in plan.updates if d == target_dir]
 
-        if not dir_creates and not dir_deletes:
+        if not dir_creates and not dir_deletes and not dir_updates:
             log_info(f"跳过（无变更）: {target_dir}")
             continue
 
@@ -405,10 +539,16 @@ def execute_force(plan: SyncPlan, source_dir: Path, targets: list[Path]):
                 shutil.copytree(source_dir / rel_path, target_dir / name, copy_function=shutil.copy2)
                 total_created += 1
 
-        log_success(f"  ✓ 完成: 新增 {len(dir_creates)} 个, 删除 {len(dir_deletes)} 个")
+        for name, source_rel, _ in dir_updates:
+            shutil.rmtree(target_dir / name)
+            shutil.copytree(source_dir / source_rel, target_dir / name, copy_function=shutil.copy2)
+            total_updated += 1
+
+        ops = f"新增 {len(dir_creates)} 个, 删除 {len(dir_deletes)} 个, 覆盖 {len(dir_updates)} 个"
+        log_success(f"  ✓ 完成: {ops}")
         print(file=sys.stderr)
 
-    return {"created": total_created, "deleted": total_deleted}
+    return {"created": total_created, "deleted": total_deleted, "updated": total_updated}
 
 
 # ============================================================
@@ -435,11 +575,23 @@ def verify_sync(source_dir: Path, targets: list[Path]) -> bool:
         if not target_dir.is_dir():
             continue
         target_count = len(find_skills_in_target(target_dir))
-        if target_count == source_count:
-            log_success(f"✓ {target_dir}: {target_count} 个 skills (一致)")
-        else:
-            log_error(f"✗ {target_dir}: {target_count} 个 skills (不一致!)")
+        if target_count != source_count:
+            log_error(f"✗ {target_dir}: {target_count} 个 skills (数量不一致!)")
             all_match = False
+            continue
+        # 检查每个 skill 的内容哈希
+        hash_mismatch = False
+        for skill in source_skills:
+            target_skill_path = target_dir / skill.name
+            if target_skill_path.is_dir():
+                source_hash = skill_dir_hash(source_dir / skill.rel_path)
+                target_hash = skill_dir_hash(target_skill_path)
+                if source_hash != target_hash:
+                    log_error(f"✗ {target_dir}/{skill.name}: 内容不一致")
+                    hash_mismatch = True
+                    all_match = False
+        if not hash_mismatch:
+            log_success(f"✓ {target_dir}: {target_count} 个 skills (内容一致)")
 
     print(file=sys.stderr)
     if all_match and not dups:
@@ -611,7 +763,8 @@ def main(argv: list[str] | None = None):
         print("  同步完成")
         print("========================================")
         print(f"{Color.GREEN}新增: {stats['created']} 个{Color.NC}")
-        print(f"{Color.YELLOW}删除: {stats['deleted']} 个{Color.NC}")
+        print(f"{Color.YELLOW}覆盖: {stats['updated']} 个{Color.NC}")
+        print(f"{Color.RED}删除: {stats['deleted']} 个{Color.NC}")
     else:
         stats = execute_bidirectional(plan, source_dir, targets)
         verify_sync(source_dir, targets)

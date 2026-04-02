@@ -19,6 +19,7 @@ from sync_skills import (
     main,
     preview_bidirectional,
     preview_force,
+    skill_dir_hash,
 )
 
 
@@ -117,6 +118,48 @@ class TestScan:
         from sync_skills import Skill
         skills = [Skill("a", "Code/a"), Skill("b", "Lark/b")]
         assert check_duplicate_names(skills) == []
+
+    def test_skill_dir_hash_identical(self, env):
+        """相同内容的目录产生相同哈希"""
+        source, target_a, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "hello")
+        create_skill(target_a, "skill-a", "hello")
+
+        assert skill_dir_hash(source / "Code" / "skill-a") == skill_dir_hash(target_a / "skill-a")
+
+    def test_skill_dir_hash_different(self, env):
+        """不同内容的目录产生不同哈希"""
+        source, target_a, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "hello")
+        create_skill(target_a, "skill-a", "world")
+
+        assert skill_dir_hash(source / "Code" / "skill-a") != skill_dir_hash(target_a / "skill-a")
+
+    def test_skill_dir_hash_extra_file_detected(self, env):
+        """目录中新增额外文件会导致哈希变化"""
+        source, target_a, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "same")
+        create_skill(target_a, "skill-a", "same")
+        # 目标多一个文件
+        (target_a / "skill-a" / "extra.txt").write_text("extra")
+
+        assert skill_dir_hash(source / "Code" / "skill-a") != skill_dir_hash(target_a / "skill-a")
+
+    def test_skill_dir_hash_order_independent(self, env):
+        """文件创建顺序不影响哈希（因为按路径排序）"""
+        _, target_a, _ = env
+        create_skill(target_a, "skill-a", "content")
+        (target_a / "skill-a" / "b.txt").write_text("b")
+        (target_a / "skill-a" / "a.txt").write_text("a")
+
+        hash1 = skill_dir_hash(target_a / "skill-a")
+        # 重新创建，顺序相反
+        shutil.rmtree(target_a / "skill-a")
+        create_skill(target_a, "skill-a", "content")
+        (target_a / "skill-a" / "a.txt").write_text("a")
+        (target_a / "skill-a" / "b.txt").write_text("b")
+
+        assert skill_dir_hash(target_a / "skill-a") == hash1
 
 
 # ============================================================
@@ -292,6 +335,38 @@ class TestForce:
         run_main(source, [target_a, target_b], force=True)
         captured = capsys.readouterr()
         assert "无需同步" in captured.err
+
+    def test_force_overwrites_different_content(self, env):
+        """force 模式下，同名但内容不同的 skill 被源目录覆盖"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "source-version")
+        create_skill(target_a, "skill-a", "old-version")
+        create_skill(target_b, "skill-a", "source-version")
+
+        plan = preview_force(source, [target_a, target_b])
+        assert len(plan.updates) == 1
+        assert plan.updates[0][0] == "skill-a"
+        assert plan.updates[0][2] == target_a
+        # target_b 内容一致，不产生 update
+        assert not any(d == target_b for _, _, d in plan.updates)
+
+        execute_force(plan, source, [target_a, target_b])
+        assert (target_a / "skill-a" / "SKILL.md").read_text() == "source-version"
+
+    def test_force_overwrites_with_extra_files(self, env):
+        """force 模式下，目标 skill 有额外文件时也完整覆盖"""
+        source, target_a, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "src")
+        create_skill(target_a, "skill-a", "tgt")
+        (target_a / "skill-a" / "extra.txt").write_text("extra")
+
+        plan = preview_force(source, [target_a])
+        assert len(plan.updates) == 1
+
+        execute_force(plan, source, [target_a])
+        assert (target_a / "skill-a" / "SKILL.md").read_text() == "src"
+        # 额外文件被清除（整个目录被替换）
+        assert not (target_a / "skill-a" / "extra.txt").exists()
 
 
 # ============================================================
@@ -625,7 +700,7 @@ class TestUserScenarios:
         # 应有警告
         assert len(plan.warnings) >= 1
         assert any("skill-a" in w for w in plan.warnings)
-        assert any("--force" in w for w in plan.warnings)
+        assert any("skill-a" in w and "内容不一致" in w for w in plan.warnings)
 
     def test_s6_multi_target_conflict(self, env):
         """S6: 多个目标同时修改同一 skill → 跳过自动合并，警告用户"""
@@ -644,7 +719,7 @@ class TestUserScenarios:
         assert len(plan.collect_update) == 0
         # 应有警告
         assert len(plan.warnings) >= 1
-        assert any("skill-a" in w and "多个目标" in w for w in plan.warnings)
+        assert any("skill-a" in w and "内容不一致" in w for w in plan.warnings)
 
     def test_s6b_source_and_target_both_modified(self, env):
         """S6b: 源和目标都修改了同一 skill → 冲突，跳过并警告"""
@@ -664,7 +739,7 @@ class TestUserScenarios:
         # 不应自动收集（两边都改了是冲突）
         assert len(plan.collect_update) == 0
         # 应有冲突警告
-        assert any("skill-a" in w and "都被修改" in w for w in plan.warnings)
+        assert any("skill-a" in w and "内容不一致" in w for w in plan.warnings)
 
     def test_s7_delete_from_target_gets_restored(self, env):
         """S7: 从目标删除 skill → 双向同步会重新分发回来"""

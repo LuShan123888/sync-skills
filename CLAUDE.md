@@ -10,11 +10,13 @@ uv run python -m pytest tests/ -v -k test_collect_new_skill  # run single test
 uv sync                          # install dependencies
 ./sync_skills.py                 # run directly
 ./sync_skills.py --force -y      # force sync, skip confirm
+./sync_skills.py --delete skill-name    # delete skill from source + all targets
+./sync_skills.py -d skill-name -y       # delete with auto-confirm
 ```
 
 ## Architecture
 
-Single-file CLI tool (`sync_skills.py`, ~500 lines, zero external dependencies) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
+Single-file CLI tool (`sync_skills.py`, ~630 lines, zero external dependencies) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
 
 ### Core flow: Plan → Preview → Confirm → Execute → Verify
 
@@ -44,7 +46,15 @@ Single-file CLI tool (`sync_skills.py`, ~500 lines, zero external dependencies) 
 
 ### Test structure
 
-Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation. 40 tests total.
+Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation. 46 tests total.
+
+### Delete command
+
+**Usage:** `--delete <skill-name>` or `-d <skill-name>` removes a skill from both source and all target directories. Default mode shows preview and requires confirmation; `-y` flag auto-confirms.
+
+**Safety:** Before deletion, verifies skill exists in at least one location. Shows detailed preview: which directories contain the skill, total deletion count. Non-existent skills trigger error message without side effects.
+
+**When to use:** Removing obsolete or unwanted skills that exist in multiple locations. More efficient than manual deletion across 4+ directories.
 
 ## Design doc
 
