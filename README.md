@@ -107,7 +107,11 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 
 ### 强制同步 / Force (`--force`)
 
-以源目录为唯一真实来源。补齐缺少的，删除多余的，不修改源目录。
+默认以源目录为基准。也支持交互式选择任意目录为基准同步到其他目录（不带 `-y` 时会先展示概览，然后让用户选择）。
+
+补齐缺少的，覆盖内容不同的（基于 MD5 哈希比较），删除多余的。内容完全一致的自动跳过。
+
+当源目录被选为目标时，保留其嵌套分类结构：新增的 skill 放到 `Other/`，删除在嵌套结构中定位。
 
 适合删除或重组 skill 后使用。
 
@@ -117,7 +121,7 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 
 | 参数 | 说明 |
 |------|------|
-| `--force`, `-f` | 强制同步（源 → 目标单向，删除多余） |
+| `--force`, `-f` | 强制同步（可选择任意目录为基准，覆盖内容不同的，删除多余的） |
 | `--delete NAME`, `-d NAME` | 删除指定 skill（从源目录和所有目标目录） |
 | `-y`, `--yes` | 跳过确认提示 |
 | `--source DIR` | 源目录路径（默认 `~/Skills`） |
@@ -139,7 +143,9 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 
 - **预览确认** — 所有操作先展示变更清单，确认后才执行
 - **重名检测** — 不同分类下存在同名 skill 时，直接报错退出
-- **同步验证** — 执行后自动验证各目录的 skill 数量是否一致
+- **同步验证** — 执行后自动验证各目录的内容哈希是否一致
+- **内容感知** — 基于 MD5 哈希比较，内容相同的 skill 不会重复覆盖
+- **隐藏目录过滤** — 自动跳过 `.system/` 等隐藏目录
 - **无变更跳过** — 已同步的目录不执行任何操作
 
 ---
@@ -147,7 +153,7 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 ## 开发 / Development
 
 ```bash
-uv run pytest tests/ -v    # 运行测试（46 个用例）
+uv run pytest tests/ -v    # 运行测试（59 个用例）
 ```
 
 ## License
@@ -216,13 +222,13 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 2. **Distribute**: Syncs all skills from source to every target
 
 **Force (`--force`)**
-Source directory is the single source of truth. Adds missing skills, removes extras. Does not modify source.
+Source directory is the default base. Supports interactive base selection — choose any directory as the base to sync to all others (without `-y`). Uses MD5 content hashing to detect differences; identical skills are skipped. When source is a target, preserves its nested category structure.
 
 ## Options
 
 | Flag | Description |
 |------|-------------|
-| `--force`, `-f` | Force sync (source → targets, removes extras) |
+| `--force`, `-f` | Force sync (selectable base, content-aware, removes extras) |
 | `--delete NAME`, `-d NAME` | Delete a skill (from source and all targets) |
 | `-y`, `--yes` | Skip confirmation |
 | `--source DIR` | Source directory (default: `~/Skills`) |
@@ -232,13 +238,15 @@ Source directory is the single source of truth. Adds missing skills, removes ext
 
 - Preview before execute — shows full diff before any changes
 - Duplicate name detection — errors if same skill name exists in multiple categories
-- Post-sync verification — confirms all targets match source
+- Post-sync verification — confirms content hashes match across all directories
+- Content-aware — MD5 hashing, identical skills are skipped
+- Hidden directory filtering — automatically skips `.system/` etc.
 - No-op skip — unchanged directories are skipped
 
 ## Development
 
 ```bash
-uv run pytest tests/ -v    # 26 test cases
+uv run pytest tests/ -v    # 59 test cases
 ```
 
 ## License

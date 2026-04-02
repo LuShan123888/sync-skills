@@ -16,15 +16,15 @@ uv sync                          # install dependencies
 
 ## Architecture
 
-Single-file CLI tool (`sync_skills.py`, ~800 lines, zero external dependencies) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
+Single-file CLI tool (`sync_skills.py`, ~900 lines, zero external dependencies) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
 
 ### Core flow: Plan → Preview → Confirm → Execute → Verify
 
-1. **Scan**: `find_skills_in_source()` (recursive, nested categories) and `find_skills_in_target()` (flat)
+1. **Scan**: `find_skills_in_source()` (recursive, nested categories) and `find_skills_in_target()` (flat, skips hidden dirs)
 2. **Plan**: `preview_bidirectional()` or `preview_force()` builds a `SyncPlan` dataclass
-3. **Preview**: `show_preview()` displays the diff to the user
+3. **Preview**: `show_preview()` displays the diff with relative paths per directory
 4. **Execute**: `execute_bidirectional()` or `execute_force()` applies the plan via `shutil.copytree`/`rmtree`
-5. **Verify**: `verify_sync()` checks skill counts match across all directories
+5. **Verify**: `verify_sync()` checks content hashes match across all directories
 
 ### Key concepts
 
@@ -32,7 +32,7 @@ Single-file CLI tool (`sync_skills.py`, ~800 lines, zero external dependencies) 
 - **Source** (`~/Skills/`): nested category structure (e.g., `Code/skill-a/`, `Lark/skill-b/`)
 - **Targets** (flat): each tool's skills dir. Categories are flattened — only the leaf directory name matters
 - **Bidirectional mode**: collects new/updated skills from targets into `~/Skills/Other/`, then distributes all skills to targets
-- **Force mode**: source is truth — adds missing, deletes extras, never modifies source. Supports interactive base directory selection (`--force` without `-y`)
+- **Force mode**: supports interactive base directory selection (`--force` without `-y`). When source dir is a target, preserves nested structure (new skills go to `Other/`, deletes use recursive lookup). Uses MD5 content hash comparison — identical skills are skipped without re-copying.
 - Duplicate skill names across categories are a fatal error (would conflict when flattened)
 
 ### Conflict handling (core design principle)
@@ -43,6 +43,13 @@ Single-file CLI tool (`sync_skills.py`, ~800 lines, zero external dependencies) 
 - 源+目标都改了 → 警告跳过，用户手动处理
 - 多目标都改了同一 skill → 警告跳过，用户手动处理
 - 删除 skill → 从源删除 + `--force` 同步
+
+### Content comparison
+
+- **MD5 directory hashing** (`skill_dir_hash()`): computes hash of all files in a skill directory, excluding hidden files (`.DS_Store`, etc.)
+- **Hidden directory filtering**: all scan functions skip directories with `.` prefix (e.g., `.system/`)
+- **Conflict display**: `_build_version_warning()` groups by hash, sorts by mtime, marks suggested version (git-like)
+- **Path display**: all output uses `~/` relative paths (e.g., `~/.claude/skills`), never full paths
 
 ### Test structure
 
