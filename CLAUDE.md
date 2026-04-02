@@ -5,18 +5,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv run python -m pytest tests/ -v          # run all tests
+uv run python -m pytest tests/ -v          # run all tests (77 cases)
 uv run python -m pytest tests/ -v -k test_collect_new_skill  # run single test
 uv sync                          # install dependencies
-./sync_skills.py                 # run directly
-./sync_skills.py --force -y      # force sync, skip confirm
-./sync_skills.py --delete skill-name    # delete skill from source + all targets
-./sync_skills.py -d skill-name -y       # delete with auto-confirm
+sync-skills                      # run (after pip install -e .)
+sync-skills --force -y           # force sync, skip confirm
+sync-skills init                 # interactive config wizard
+sync-skills --delete skill-name  # delete skill from source + all targets
+sync-skills -d skill-name -y     # delete with auto-confirm
+sync-skills --config /path/to/config.toml  # use custom config
 ```
 
 ## Architecture
 
-Single-file CLI tool (`sync_skills.py`, ~900 lines, zero external dependencies) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
+Package-based CLI tool (`src/sync_skills/`, zero external dependencies, Python >= 3.11) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
+
+### Package structure
+
+```
+src/sync_skills/
+├── __init__.py      # version export (__version__ = "0.2.0")
+├── constants.py     # DEFAULT_SOURCE, DEFAULT_TARGETS, KNOWN_TOOLS, CONFIG_FILE
+├── config.py        # Config/Target dataclasses, load/save TOML, detect_installed_tools
+└── cli.py           # all sync logic, CLI parsing, init wizard
+```
 
 ### Core flow: Plan → Preview → Confirm → Execute → Verify
 
@@ -55,6 +67,12 @@ Single-file CLI tool (`sync_skills.py`, ~900 lines, zero external dependencies) 
 
 Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`, `TestBaseSelection`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation. 59 tests total.
 
+Additional test files:
+- `tests/test_config.py` — Config module tests (load, save, path expand/unexpand, detect tools): 15 tests
+- `tests/test_init.py` — Init wizard tests (config creation, default/custom source): 3 tests
+
+Total: 77 tests.
+
 ### Delete command
 
 **Usage:** `--delete <skill-name>` or `-d <skill-name>` removes a skill from both source and all target directories. Default mode shows preview and requires confirmation; `-y` flag auto-confirms.
@@ -62,6 +80,32 @@ Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class
 **Safety:** Before deletion, verifies skill exists in at least one location. Shows detailed preview: which directories contain the skill, total deletion count. Non-existent skills trigger error message without side effects.
 
 **When to use:** Removing obsolete or unwanted skills that exist in multiple locations. More efficient than manual deletion across 4+ directories.
+
+### Init command
+
+**Usage:** `sync-skills init` launches an interactive wizard that creates `~/.config/sync-skills/config.toml`.
+
+Steps:
+1. Source directory (default: `~/Skills`)
+2. Detect installed tools and let user select targets
+3. Optionally add custom target paths
+
+**Custom config:** `sync-skills --config /path/to/config.toml` to use a non-default config file.
+
+### Config file
+
+Stored at `~/.config/sync-skills/config.toml` (or custom path via `--config`):
+
+```toml
+source = "~/Skills"
+
+[[targets]]
+name = "Claude Code"
+path = "~/.claude/skills"
+```
+
+- CLI args (`--source`, `--targets`) override config values
+- Missing config → falls back to built-in defaults (backward compatible)
 
 ## Design doc
 
@@ -82,6 +126,5 @@ See `docs/DESIGN.md` for:
 
 ## Current status
 
-- **版本**: v0.1（功能基本完整，未发布 PyPI）
-- **下一步**: Phase 1 — PyPI 打包、首次启动引导、配置文件持久化
-- **参考项目**: video-captions (`/Users/cian/Code/video-captions`) 的 PyPI 打包方式
+- **版本**: v0.2.0（src/ 布局，配置化，init 向导，PyPI 就绪）
+- **Phase 1 已完成**: src/sync_skills/ 包结构、config.py、init 向导、hatchling 打包

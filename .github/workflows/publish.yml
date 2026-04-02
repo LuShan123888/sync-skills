@@ -1,0 +1,91 @@
+name: Publish to PyPI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/publish.yml'
+      - 'pyproject.toml'
+
+permissions:
+  contents: write
+  id-token: write  # 用于 Trusted Publishing
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Auto bump version
+        run: |
+          # 获取今天的日期 (YYYYMMDD)
+          DATE=$(date +%Y%m%d)
+          # 获取当前版本号
+          CURRENT_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          # 检查当前版本是否包含今天的日期
+          if [[ "$CURRENT_VERSION" == *"0.2.$DATE"* ]]; then
+            # 提取序号并递增
+            SERIAL=$(echo $CURRENT_VERSION | awk -F. '{print $4}')
+            NEW_SERIAL=$((SERIAL + 1))
+            NEW_VERSION="0.2.$DATE.$NEW_SERIAL"
+          else
+            # 新的一天，从序号 1 开始
+            NEW_VERSION="0.2.$DATE.1"
+          fi
+          # 更新 pyproject.toml
+          sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" pyproject.toml
+          # 同步更新 __init__.py
+          sed -i "s/__version__ = .*/__version__ = \"$NEW_VERSION\"/" src/sync_skills/__init__.py
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "版本号: $CURRENT_VERSION -> $NEW_VERSION"
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml src/sync_skills/__init__.py
+          git commit -m "chore: auto bump version to ${{ env.NEW_VERSION }}"
+          git push
+
+      - name: Build package
+        run: uv build
+
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sync-skills
+
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

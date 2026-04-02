@@ -16,18 +16,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .config import Config, Target, detect_installed_tools, load_config, save_config
+from .constants import CONFIG_FILE, DEFAULT_SOURCE, DEFAULT_TARGETS
+
 # ============================================================
 # 数据结构
 # ============================================================
-
-DEFAULT_SOURCE = Path.home() / "Skills"
-DEFAULT_TARGETS = [
-    Path.home() / ".claude" / "skills",
-    Path.home() / ".codex" / "skills",
-    Path.home() / ".gemini" / "skills",
-    Path.home() / ".openclaw" / "skills",
-]
-
 
 @dataclass
 class Skill:
@@ -912,30 +906,116 @@ def execute_delete(skill_name: str, source_dir: Path, targets: list[Path], auto_
 
 
 # ============================================================
+# init 向导
+# ============================================================
+
+def _run_init_wizard(config_path: Path | None = None):
+    """交互式初始化配置向导"""
+    from .config import _expand_home, _unexpand_home
+
+    config_file = config_path or CONFIG_FILE
+    print("=== sync-skills 初始化配置 ===\n")
+
+    # 1. 源目录
+    default_source = "~/Skills"
+    try:
+        source_input = input(f"源目录路径 (默认 {default_source}): ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        log_warning("用户取消")
+        return
+    source_str = source_input.strip() or default_source
+    source_path = _expand_home(source_str)
+
+    # 2. 检测已安装工具
+    installed = detect_installed_tools()
+    if installed:
+        print(f"\n检测到已安装的工具:")
+        for i, tool in enumerate(installed):
+            print(f"  [{i}] {tool['name']}  {tool['path']}")
+    else:
+        print("\n未检测到已安装的工具，可以手动添加。")
+
+    # 3. 选择目标目录
+    try:
+        select_input = input("\n选择要同步的目标目录 (编号，逗号分隔，直接回车全选): ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        log_warning("用户取消")
+        return
+
+    if select_input.strip():
+        indices = [int(x.strip()) for x in select_input.split(",") if x.strip().isdigit()]
+        selected_tools = [installed[i] for i in indices if 0 <= i < len(installed)]
+    else:
+        selected_tools = installed
+
+    # 4. 手动添加额外目标
+    try:
+        extra_input = input("添加额外的目标目录路径 (逗号分隔，直接回车跳过): ")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        extra_input = ""
+
+    targets = []
+    for tool in selected_tools:
+        targets.append(Target(name=tool["name"], path=_expand_home(tool["path"])))
+    if extra_input.strip():
+        for extra in extra_input.split(","):
+            extra = extra.strip()
+            if extra:
+                p = _expand_home(extra)
+                targets.append(Target(name=p.name, path=p))
+
+    if not targets:
+        print("\n未选择任何目标目录，将使用内置默认值。")
+        config = Config(source=source_path)
+    else:
+        config = Config(source=source_path, targets=targets)
+
+    # 5. 保存配置
+    save_config(config, config_path=config_file)
+    print(f"\n配置已保存到: {config_file}")
+    print(f"  源目录: {_unexpand_home(config.source)}")
+    for t in config.targets:
+        print(f"  目标: {t.name}  {_unexpand_home(t.path)}")
+
+
+# ============================================================
 # CLI
 # ============================================================
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Skills 同步工具")
+    parser.add_argument("command", nargs="?", default=None, help="子命令：init（初始化配置）")
+    parser.add_argument("--config", type=Path, default=None, help="配置文件路径")
     parser.add_argument("--force", "-f", action="store_true", help="强制同步模式（可选择任意目录为基准同步到其他目录）")
     parser.add_argument("--delete", "-d", type=str, metavar="SKILL_NAME", help="删除指定的 skill（从源目录和所有目标目录）")
     parser.add_argument("-y", "--yes", action="store_true", help="跳过确认")
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE, help="源目录路径")
-    parser.add_argument("--targets", type=str, default=None, help="目标目录路径，逗号分隔")
+    parser.add_argument("--source", type=Path, default=None, help="源目录路径（覆盖配置文件）")
+    parser.add_argument("--targets", type=str, default=None, help="目标目录路径，逗号分隔（覆盖配置文件）")
     args = parser.parse_args(argv)
 
     if args.targets:
         args.targets = [Path(t.strip()) for t in args.targets.split(",")]
-    else:
-        args.targets = list(DEFAULT_TARGETS)
 
     return args
 
 
 def main(argv: list[str] | None = None):
     args = parse_args(argv)
-    source_dir: Path = args.source
-    targets: list[Path] = args.targets
+
+    # init 子命令
+    if args.command == "init":
+        _run_init_wizard(config_path=args.config)
+        return
+
+    # 加载配置
+    config = load_config(args.config)
+
+    # CLI 参数覆盖配置文件
+    source_dir: Path = args.source if args.source else config.source
+    targets: list[Path] = args.targets if args.targets else [t.path for t in config.targets]
     force: bool = args.force
 
     # 删除模式

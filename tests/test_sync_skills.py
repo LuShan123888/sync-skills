@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sync_skills import (
+from sync_skills.cli import (
     SyncPlan,
     ask_base_selection,
     check_duplicate_names,
@@ -106,7 +106,7 @@ class TestScan:
         assert find_skill_in_source_by_name(source, "nope") is None
 
     def test_check_duplicate_names(self):
-        from sync_skills import Skill
+        from sync_skills.cli import Skill
         skills = [
             Skill("dup", "Code/dup"),
             Skill("unique", "Lark/unique"),
@@ -117,7 +117,7 @@ class TestScan:
         assert dups[0][0] == "dup"
 
     def test_check_no_duplicates(self):
-        from sync_skills import Skill
+        from sync_skills.cli import Skill
         skills = [Skill("a", "Code/a"), Skill("b", "Lark/b")]
         assert check_duplicate_names(skills) == []
 
@@ -889,7 +889,7 @@ class TestBaseSelection:
         create_skill(target_a, "skill-a", "same")
         create_skill(target_a, "skill-b", "different")
 
-        from sync_skills import _build_alias_map
+        from sync_skills.cli import _build_alias_map
         alias_map = _build_alias_map(source, [target_a])
         show_overview(source, [target_a], alias_map)
         captured = capsys.readouterr()

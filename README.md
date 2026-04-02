@@ -63,12 +63,24 @@ sync-skills 的做法：
 ### 安装 / Install
 
 ```bash
+# 推荐：通过 PyPI 安装
+uv tool install sync-skills
+
+# 或从源码安装
 git clone https://github.com/LuShan123888/sync-skills.git
 cd sync-skills
-uv sync
+pip install -e .
 ```
 
-> 要求 Python >= 3.14
+> 要求 Python >= 3.11
+
+### 初始化配置 / Init Config
+
+```bash
+sync-skills init    # 交互式配置向导，自动检测已安装工具
+```
+
+配置文件保存在 `~/.config/sync-skills/config.toml`，也可以手动编辑。
 
 ### 使用 / Usage
 
@@ -124,8 +136,10 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 | `--force`, `-f` | 强制同步（可选择任意目录为基准，覆盖内容不同的，删除多余的） |
 | `--delete NAME`, `-d NAME` | 删除指定 skill（从源目录和所有目标目录） |
 | `-y`, `--yes` | 跳过确认提示 |
-| `--source DIR` | 源目录路径（默认 `~/Skills`） |
-| `--targets DIR1,DIR2` | 目标目录，逗号分隔 |
+| `--source DIR` | 源目录路径（默认 `~/Skills`，覆盖配置文件） |
+| `--targets DIR1,DIR2` | 目标目录，逗号分隔（覆盖配置文件） |
+| `--config PATH` | 配置文件路径（默认 `~/.config/sync-skills/config.toml`） |
+| `init` | 交互式初始化配置 |
 
 ### 默认目录 / Default Directories
 
@@ -153,7 +167,7 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 ## 开发 / Development
 
 ```bash
-uv run pytest tests/ -v    # 运行测试（59 个用例）
+uv run pytest tests/ -v    # 运行测试（77 个用例）
 ```
 
 ## License
@@ -189,12 +203,20 @@ Symlinks seem like the obvious solution, but they fall short:
 ## Quick Start
 
 ```bash
+# Recommended: install from PyPI
+uv tool install sync-skills
+
+# Or install from source
 git clone https://github.com/LuShan123888/sync-skills.git
 cd sync-skills
-uv sync
+pip install -e .
 ```
 
-Requires Python >= 3.14.
+Requires Python >= 3.11.
+
+```bash
+sync-skills init    # Interactive config wizard, auto-detects installed tools
+```
 
 ## Usage
 
@@ -231,8 +253,10 @@ Source directory is the default base. Supports interactive base selection — ch
 | `--force`, `-f` | Force sync (selectable base, content-aware, removes extras) |
 | `--delete NAME`, `-d NAME` | Delete a skill (from source and all targets) |
 | `-y`, `--yes` | Skip confirmation |
-| `--source DIR` | Source directory (default: `~/Skills`) |
-| `--targets DIR1,DIR2` | Target directories, comma-separated |
+| `--source DIR` | Source directory (default: `~/Skills`, overrides config) |
+| `--targets DIR1,DIR2` | Target directories, comma-separated (overrides config) |
+| `--config PATH` | Config file path (default: `~/.config/sync-skills/config.toml`) |
+| `init` | Interactive init wizard |
 
 ## Safety
 
@@ -246,7 +270,7 @@ Source directory is the default base. Supports interactive base selection — ch
 ## Development
 
 ```bash
-uv run pytest tests/ -v    # 59 test cases
+uv run pytest tests/ -v    # 77 test cases
 ```
 
 ## License

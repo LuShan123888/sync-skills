@@ -1,14 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "sync-skills"
-version = "0.1.0"
-description = "Skills 双向/强制同步工具"
-requires-python = ">=3.14"
+version = "0.2.0"
+description = "AI coding agent skills 双向/强制同步工具"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-sync-skills = "sync_skills:main"
+sync-skills = "sync_skills.cli:main"
+
+[project.urls]
+Repository = "https://github.com/LuShan123888/sync-skills"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sync_skills"]
+sources = {"src" = ""}
 
 [dependency-groups]
 dev = [
+    "build>=1.4.2",
     "pytest>=9.0.2",
 ]
