@@ -838,30 +838,35 @@ class TestBaseSelection:
         create_skill(target_b, "skill-a", "old-target")
 
         # 以 target_a 为基准，同步到 source 和 target_b
-        plan = preview_force(target_a, [source, target_b])
-        execute_force(plan, target_a, [source, target_b])
+        plan = preview_force(target_a, [source, target_b], original_source_dir=source)
+        execute_force(plan, target_a, [source, target_b], original_source_dir=source)
 
-        # source 作为目标时按扁平结构写入
-        assert (source / "skill-a" / "SKILL.md").read_text() == "new-version"
+        # source 作为嵌套目录：skill-a 内容不同 → 更新到 Other/
+        assert (source / "Other" / "skill-a" / "SKILL.md").read_text() == "new-version"
+        # 旧版本 Code/skill-a 被删除
+        assert not (source / "Code" / "skill-a").exists()
         # target_b 也被覆盖为新版本
         assert (target_b / "skill-a" / "SKILL.md").read_text() == "new-version"
 
     def test_force_base_syncs_to_source(self, env):
-        """以目标为基准时，源目录也被视为目标，会被同步"""
+        """以目标为基准时，源目录的新增放到 Other/，删除在嵌套结构中定位"""
         source, target_a, _ = env
         create_skill_in_category(source, "Code", "skill-a", "v1")
         create_skill_in_category(source, "Code", "skill-b", "v1")
-        # target_a 有 skill-a 的新版本 + skill-c
+        # target_a 有 skill-a 的新版本 + skill-c（源中没有）
         create_skill(target_a, "skill-a", "v2")
         create_skill(target_a, "skill-c", "v1")
 
-        plan = preview_force(target_a, [source])
-        execute_force(plan, target_a, [source])
+        plan = preview_force(target_a, [source], original_source_dir=source)
+        execute_force(plan, target_a, [source], original_source_dir=source)
 
-        # source 作为目标时按扁平结构处理
-        assert (source / "skill-a" / "SKILL.md").read_text() == "v2"
-        assert not (source / "skill-b").exists()
-        assert (source / "skill-c" / "SKILL.md").is_file()
+        # skill-a 内容不同 → 更新到 Other/
+        assert (source / "Other" / "skill-a" / "SKILL.md").read_text() == "v2"
+        assert not (source / "Code" / "skill-a").exists()
+        # skill-b 基准没有 → 从源删除
+        assert not (source / "Code" / "skill-b").exists()
+        # skill-c 源没有 → 新增到 Other/
+        assert (source / "Other" / "skill-c" / "SKILL.md").is_file()
 
     def test_force_y_still_defaults_to_source(self, env, capsys):
         """-y 模式下 force 仍默认以源为基准"""
