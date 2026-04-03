@@ -167,7 +167,7 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 ## 开发 / Development
 
 ```bash
-uv run pytest tests/ -v    # 运行测试（77 个用例）
+uv run pytest tests/ -v    # 运行测试（90 个用例）
 ```
 
 ## License

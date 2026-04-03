@@ -9,6 +9,7 @@ import pytest
 from sync_skills.cli import (
     SyncPlan,
     ask_base_selection,
+    ask_conflict_resolution,
     check_duplicate_names,
     execute_bidirectional,
     execute_delete,
@@ -22,6 +23,9 @@ from sync_skills.cli import (
     preview_force,
     show_overview,
     skill_dir_hash,
+    _apply_resolutions,
+    _build_skill_version,
+    _resolve_conflicts,
 )
 
 
@@ -686,62 +690,61 @@ class TestUserScenarios:
             run_main(source, [target_a, target_b])
 
     def test_s4_source_updated_warns(self, env):
-        """S4: 源目录修改 skill → 双向模式不会自动更新目标，但应警告用户"""
+        """S4: 源目录修改 skill → 双向模式检测为冲突"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "old")
         create_skill(target_a, "skill-a", "old")
         create_skill(target_b, "skill-a", "old")
 
         # 源目录修改
-        time.sleep(0.1)
         (source / "Code" / "skill-a" / "SKILL.md").write_text("updated-in-source")
 
         plan = preview_bidirectional(source, [target_a, target_b])
         # 不应有 collect_update（因为是源更新，不是目标更新）
         assert len(plan.collect_update) == 0
-        # 应有警告
-        assert len(plan.warnings) >= 1
-        assert any("skill-a" in w for w in plan.warnings)
-        assert any("skill-a" in w and "内容不一致" in w for w in plan.warnings)
+        # 应有冲突（源不同于所有目标）
+        assert plan.has_conflicts
+        conflict_names = [name for name, _ in plan.conflicts]
+        assert "skill-a" in conflict_names
 
     def test_s6_multi_target_conflict(self, env):
-        """S6: 多个目标同时修改同一 skill → 跳过自动合并，警告用户"""
+        """S6: 多个目标同时修改同一 skill → 冲突"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "original")
         create_skill(target_a, "skill-a", "original")
         create_skill(target_b, "skill-a", "original")
 
         # 两个目标都修改了同一个 skill
-        time.sleep(0.1)
         (target_a / "skill-a" / "SKILL.md").write_text("updated-by-a")
         (target_b / "skill-a" / "SKILL.md").write_text("updated-by-b")
 
         plan = preview_bidirectional(source, [target_a, target_b])
         # 冲突时不应自动收集更新
         assert len(plan.collect_update) == 0
-        # 应有警告
-        assert len(plan.warnings) >= 1
-        assert any("skill-a" in w and "内容不一致" in w for w in plan.warnings)
+        # 应有冲突
+        assert plan.has_conflicts
+        conflict_names = [name for name, _ in plan.conflicts]
+        assert "skill-a" in conflict_names
 
     def test_s6b_source_and_target_both_modified(self, env):
-        """S6b: 源和目标都修改了同一 skill → 冲突，跳过并警告"""
+        """S6b: 源和目标都修改了同一 skill → 冲突"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "original")
         create_skill(target_a, "skill-a", "original")
         create_skill(target_b, "skill-a", "original")
 
         # 源先修改
-        time.sleep(0.1)
         (source / "Code" / "skill-a" / "SKILL.md").write_text("updated-in-source")
-        # 目标后修改（mtime 更大）
-        time.sleep(0.1)
+        # 目标后修改
         (target_a / "skill-a" / "SKILL.md").write_text("updated-in-target")
 
         plan = preview_bidirectional(source, [target_a, target_b])
         # 不应自动收集（两边都改了是冲突）
         assert len(plan.collect_update) == 0
-        # 应有冲突警告
-        assert any("skill-a" in w and "内容不一致" in w for w in plan.warnings)
+        # 应有冲突
+        assert plan.has_conflicts
+        conflict_names = [name for name, _ in plan.conflicts]
+        assert "skill-a" in conflict_names
 
     def test_s7_delete_from_target_gets_restored(self, env):
         """S7: 从目标删除 skill → 双向同步会重新分发回来"""
@@ -920,3 +923,219 @@ class TestBaseSelection:
         monkeypatch.setattr("builtins.input", lambda _: "abc")
         result = ask_base_selection(all_dirs)
         assert result is None
+
+
+# ============================================================
+# 冲突解决测试
+# ============================================================
+
+
+class TestConflictResolution:
+    """测试纯哈希冲突检测和交互式冲突解决"""
+
+    def test_safe_collect_single_target_differs(self, env):
+        """单个目标不同于源 → 自动 collect_update"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "same")
+        create_skill(target_a, "skill-a", "modified")
+        create_skill(target_b, "skill-a", "same")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert len(plan.collect_update) == 1
+        assert plan.collect_update[0][0] == "skill-a"
+        assert plan.collect_update[0][2] == target_a
+        assert not plan.has_conflicts
+
+    def test_conflict_source_differs_from_all_targets(self, env):
+        """源不同于所有目标 → 冲突"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "modified-source")
+        create_skill(target_a, "skill-a", "same-target")
+        create_skill(target_b, "skill-a", "same-target")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert not plan.collect_update
+        assert plan.has_conflicts
+        conflict_names = [name for name, _ in plan.conflicts]
+        assert "skill-a" in conflict_names
+
+    def test_conflict_two_targets_disagree(self, env):
+        """两个目标不一致 → 冲突"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "original")
+        create_skill(target_a, "skill-a", "version-a")
+        create_skill(target_b, "skill-a", "version-b")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert plan.has_conflicts
+        conflict_names = [name for name, _ in plan.conflicts]
+        assert "skill-a" in conflict_names
+
+    def test_conflict_three_versions(self, env):
+        """3 个不同版本 → 冲突"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "ver1")
+        create_skill(target_a, "skill-a", "ver2")
+        create_skill(target_b, "skill-a", "ver3")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert plan.has_conflicts
+
+    def test_new_skill_in_multiple_targets_same_content(self, env):
+        """多个目标新增同一 skill 且内容一致 → 安全收集"""
+        source, target_a, target_b = env
+        create_skill(target_a, "skill-new", "same-content")
+        create_skill(target_b, "skill-new", "same-content")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert len(plan.collect_new) == 1
+        assert plan.collect_new[0][0] == "skill-new"
+        assert not plan.has_conflicts
+
+    def test_new_skill_in_multiple_targets_different_content(self, env):
+        """多个目标新增同一 skill 但内容不同 → 冲突"""
+        source, target_a, target_b = env
+        create_skill(target_a, "skill-new", "version-a")
+        create_skill(target_b, "skill-new", "version-b")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert plan.has_conflicts
+
+    def test_ask_conflict_resolution_valid(self, env, monkeypatch):
+        """monkeypatch input 选版本"""
+        source, target_a, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "source-ver")
+        create_skill(target_a, "skill-a", "target-ver")
+
+        versions = [
+            _build_skill_version(source / "Code" / "skill-a", "source", is_source=True, source_rel="Code/skill-a"),
+            _build_skill_version(target_a / "skill-a", "target"),
+        ]
+
+        monkeypatch.setattr("builtins.input", lambda _: "1")
+        result = ask_conflict_resolution("skill-a", versions, auto_confirm=False)
+        assert result is not None
+        assert result.skill_name == "skill-a"
+
+    def test_ask_conflict_resolution_skip(self, env, monkeypatch):
+        """输入 s 跳过"""
+        source, target_a, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "source-ver")
+        create_skill(target_a, "skill-a", "target-ver")
+
+        versions = [
+            _build_skill_version(source / "Code" / "skill-a", "source", is_source=True, source_rel="Code/skill-a"),
+            _build_skill_version(target_a / "skill-a", "target"),
+        ]
+
+        monkeypatch.setattr("builtins.input", lambda _: "s")
+        result = ask_conflict_resolution("skill-a", versions, auto_confirm=False)
+        assert result is None
+
+    def test_ask_conflict_resolution_auto(self, env):
+        """-y 模式返回 None"""
+        source, target_a, _ = env
+        versions = [
+            _build_skill_version(source / "Code" / "skill-a", "source", is_source=True, source_rel="Code/skill-a"),
+            _build_skill_version(target_a / "skill-a", "target"),
+        ]
+
+        result = ask_conflict_resolution("skill-a", versions, auto_confirm=True)
+        assert result is None
+
+    def test_resolve_conflicts_auto_mode(self, env):
+        """-y 模式下冲突转为 warning"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "source-ver")
+        create_skill(target_a, "skill-a", "target-ver")
+        create_skill(target_b, "skill-a", "target-ver")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert plan.has_conflicts
+
+        _resolve_conflicts(plan, auto_confirm=True)
+
+        # 冲突应被清空，转为 warning
+        assert not plan.has_conflicts
+        assert len(plan.warnings) >= 1
+        assert any("skill-a" in w for w in plan.warnings)
+
+    def test_apply_resolutions_from_source(self, env):
+        """选源版本 → 分发到所有目标"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "source-ver")
+        create_skill(target_a, "skill-a", "target-ver")
+        create_skill(target_b, "skill-a", "target-ver")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        # 手动添加一个 resolution（选源版本）
+        from sync_skills.cli import ConflictResolution
+        plan.resolutions.append(ConflictResolution(
+            skill_name="skill-a",
+            chosen_path=source / "Code" / "skill-a",
+            chosen_alias="source",
+            chosen_source_rel="Code/skill-a",
+        ))
+        plan.conflicts.clear()
+
+        _apply_resolutions(plan, source, [target_a, target_b])
+
+        # 应生成 updates（覆盖目标）
+        update_names = [n for n, _, d in plan.updates]
+        assert "skill-a" in update_names
+
+    def test_apply_resolutions_from_target(self, env):
+        """选目标版本 → 收集到源 + 分发到其他目标"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "source-ver")
+        create_skill(target_a, "skill-a", "target-ver")
+        create_skill(target_b, "skill-a", "source-ver")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        # 手动添加 resolution（选 target_a 版本）
+        from sync_skills.cli import ConflictResolution
+        plan.resolutions.append(ConflictResolution(
+            skill_name="skill-a",
+            chosen_path=target_a / "skill-a",
+            chosen_alias="target_a",
+            chosen_source_rel=None,
+        ))
+        plan.conflicts.clear()
+
+        _apply_resolutions(plan, source, [target_a, target_b])
+
+        # 应生成 collect_update（收集到源）
+        collect_names = [n for n, _, _ in plan.collect_update]
+        assert "skill-a" in collect_names
+        # 应生成 updates（分发到 target_b）
+        update_targets = [d for _, _, d in plan.updates]
+        assert target_b in update_targets
+        # target_a 不应出现在 updates（它是来源）
+        assert target_a not in update_targets
+
+    def test_resolve_and_execute_end_to_end(self, env, monkeypatch, capsys):
+        """端到端：解决冲突 → 执行 → 验证"""
+        source, target_a, target_b = env
+        # 先创建目标版本，再创建源版本（确保源 mtime 最新，排序后为 index 0）
+        create_skill(target_a, "skill-a", "target-a-ver")
+        create_skill(target_b, "skill-a", "target-b-ver")
+        time.sleep(0.05)
+        create_skill_in_category(source, "Code", "skill-a", "source-ver")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert plan.has_conflicts
+
+        # 模拟用户选源版本（版本 0，mtime 最新为建议版本）
+        monkeypatch.setattr("builtins.input", lambda _: "0")
+        _resolve_conflicts(plan, auto_confirm=False)
+        _apply_resolutions(plan, source, [target_a, target_b])
+
+        assert not plan.has_conflicts
+        assert len(plan.resolutions) == 1
+
+        # 执行
+        execute_bidirectional(plan, source, [target_a, target_b])
+
+        # 两个目标都应被更新为源版本
+        assert (target_a / "skill-a" / "SKILL.md").read_text() == "source-ver"
+        assert (target_b / "skill-a" / "SKILL.md").read_text() == "source-ver"
