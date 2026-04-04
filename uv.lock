@@ -88,7 +88,7 @@ wheels = [
 
 [[package]]
 name = "sync-skills"
-version = "0.2.20260402.2"
+version = "0.3.20260403.2"
 source = { editable = "." }
 
 [package.dev-dependencies]

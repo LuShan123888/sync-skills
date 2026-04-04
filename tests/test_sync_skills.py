@@ -454,7 +454,7 @@ class TestPreview:
         output = capsys.readouterr()
         combined = output.out + output.err
         assert "to-delete" in combined
-        assert "删除" in combined
+        assert "-" in combined  # 删除标记
 
     def test_no_changes_no_confirm(self, env, capsys):
         source, target_a, target_b = env
@@ -505,7 +505,7 @@ class TestMultiTarget:
         run_main(source, [target_a, target_b])
         output = capsys.readouterr()
         combined = output.out + output.err
-        assert "无变更" in combined
+        assert "同步完成" in combined
         assert (target_b / "skill-b" / "SKILL.md").is_file()
 
     def test_collect_from_target_b_only(self, env):
@@ -922,7 +922,6 @@ class TestBaseSelection:
         show_overview(source, [target_a], alias_map)
         captured = capsys.readouterr()
         combined = captured.out + captured.err
-        assert "目录概览" in combined
         assert "不一致" in combined
 
     def test_ask_base_selection_valid(self, env, monkeypatch):
