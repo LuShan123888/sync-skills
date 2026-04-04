@@ -320,6 +320,17 @@ def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
         for name in all_source_names - target_names:
             plan.creates.append((name, target_dir))
 
+    # 收集更新后，将新版本分发到其他有旧版本的目标
+    for skill_name, source_rel, from_target_dir in plan.collect_update:
+        from_hash = skill_dir_hash(from_target_dir / skill_name)
+        for target_dir in targets:
+            if target_dir == from_target_dir:
+                continue
+            target_path = target_dir / skill_name
+            if target_path.is_dir() and (target_path / "SKILL.md").is_file():
+                if skill_dir_hash(target_path) != from_hash:
+                    plan.updates.append((skill_name, source_rel, target_dir))
+
     return plan
 
 
@@ -578,106 +589,109 @@ def show_preview(plan: SyncPlan, source_dir: Path, targets: list[Path], force: b
         print(f"  {Color.GREEN}除以上警告外，没有需要执行的变更{Color.NC}\n")
         return False
 
-    # 阶段1：收集（仅双向模式）
-    if plan.collect_new or plan.collect_update:
-        print(f"{Color.BOLD}--- 阶段1：收集（目标 → 源）---{Color.NC}\n")
-        if plan.collect_new:
-            print(f"  {Color.GREEN}新增 (→ Other/):{Color.NC}")
-            for name, from_dir in plan.collect_new:
-                print(f"    {Color.GREEN}+{Color.NC} {name}  ← {from_dir}")
+    # 按目录分组展示所有变更
+    if not force:
+        print(f"{Color.BOLD}--- 变更计划 ---{Color.NC}\n")
+
+        # 源目录变更（收集）
+        src_creates = plan.collect_new  # (name, from_dir)
+        src_updates = plan.collect_update  # (name, source_rel, from_dir)
+        if src_creates or src_updates:
+            src_alias = alias_map.get(source_dir, _short_path(source_dir))
+            print(f"  {Color.BOLD}{src_alias}{Color.NC}")
+            if src_creates:
+                print(f"    {Color.GREEN}新增 ({len(src_creates)}):{Color.NC}")
+                for name, from_dir in src_creates:
+                    print(f"      {Color.GREEN}+{Color.NC} {name}  ← {from_dir}")
+            if src_updates:
+                print(f"    {Color.YELLOW}更新 ({len(src_updates)}):{Color.NC}")
+                for name, source_rel, from_dir in src_updates:
+                    print(f"      {Color.YELLOW}~{Color.NC} {name}  ← {from_dir}")
             print()
-        if plan.collect_update:
-            print(f"  {Color.YELLOW}更新:{Color.NC}")
-            for name, source_rel, from_dir in plan.collect_update:
-                print(f"    {Color.YELLOW}~{Color.NC} {source_rel}  ← {from_dir}")
+
+        # 各目标目录变更
+        for target_dir in targets:
+            dir_creates = [n for n, d in plan.creates if d == target_dir]
+            dir_deletes = [n for n, d in plan.deletes if d == target_dir]
+            dir_updates = [(n, r) for n, r, d in plan.updates if d == target_dir]
+
+            if not dir_creates and not dir_deletes and not dir_updates:
+                dir_alias = alias_map.get(target_dir, _short_path(target_dir))
+                print(f"  {Color.BOLD}{dir_alias}{Color.NC}  {Color.GREEN}✓ 无变更{Color.NC}")
+                continue
+
+            dir_alias = alias_map.get(target_dir, _short_path(target_dir))
+            print(f"  {Color.BOLD}{dir_alias}{Color.NC}")
+            if dir_creates:
+                print(f"    {Color.GREEN}新增 ({len(dir_creates)}):{Color.NC}")
+                for name in dir_creates:
+                    print(f"      {Color.GREEN}+{Color.NC} {name}")
+            if dir_updates:
+                print(f"    {Color.YELLOW}覆盖 ({len(dir_updates)}):{Color.NC}")
+                for name, source_rel in dir_updates:
+                    print(f"      {Color.YELLOW}~{Color.NC} {name}")
+            if dir_deletes:
+                print(f"    {Color.RED}删除 ({len(dir_deletes)}):{Color.NC}")
+                for name in dir_deletes:
+                    print(f"      {Color.RED}-{Color.NC} {name}")
             print()
+    else:
+        # Force 模式：每个目标目录单独列出变更
+        print(f"{Color.BOLD}--- 同步计划 ---{Color.NC}\n")
 
-    # 阶段2/分发：按目标目录分组
-    if plan.creates or plan.deletes or plan.updates:
-        if not force:
-            print(f"{Color.BOLD}--- 阶段2：分发（源 → 目标）---{Color.NC}\n")
-            for target_dir in targets:
-                dir_creates = [n for n, d in plan.creates if d == target_dir]
-                dir_deletes = [n for n, d in plan.deletes if d == target_dir]
-                dir_updates = [(n, r) for n, r, d in plan.updates if d == target_dir]
+        for target_dir in targets:
+            dir_creates = [n for n, d in plan.creates if d == target_dir]
+            dir_deletes = [n for n, d in plan.deletes if d == target_dir]
+            dir_updates = [(n, r) for n, r, d in plan.updates if d == target_dir]
 
-                if not dir_creates and not dir_deletes and not dir_updates:
-                    dir_alias = alias_map.get(target_dir, _short_path(target_dir))
-                    print(f"  {Color.BOLD}{dir_alias}{Color.NC}  {Color.GREEN}✓ 无变更{Color.NC}")
-                    continue
+            # 统计内容一致（跳过）的 skill
+            is_nested = target_dir in nested_targets
+            if is_nested:
+                existing = {s.name for s in find_skills_in_source(target_dir)}
+            else:
+                existing = set(find_skills_in_target(target_dir))
+            update_names = {n for n, _, d in plan.updates if d == target_dir}
+            same_skills = sorted(set(source_map.keys()) & existing - update_names)
+            same_count = len(same_skills)
 
-                dir_alias = alias_map.get(target_dir, _short_path(target_dir))
-                print(f"  {Color.BOLD}{dir_alias}{Color.NC}")
-                if dir_creates:
-                    print(f"    {Color.GREEN}新增 ({len(dir_creates)}):{Color.NC}")
-                    for name in dir_creates:
-                        print(f"      {Color.GREEN}+{Color.NC} {name}")
-                if dir_updates:
-                    print(f"    {Color.YELLOW}覆盖 ({len(dir_updates)}):{Color.NC}")
-                    for name, source_rel in dir_updates:
-                        print(f"      {Color.YELLOW}~{Color.NC} {source_rel}")
-                if dir_deletes:
-                    print(f"    {Color.RED}删除 ({len(dir_deletes)}):{Color.NC}")
-                    for name in dir_deletes:
-                        print(f"      {Color.RED}-{Color.NC} {name}")
-                print()
-        else:
-            # Force 模式：每个目标目录单独列出变更
-            print(f"{Color.BOLD}--- 同步计划 ---{Color.NC}\n")
+            c, u, d = len(dir_creates), len(dir_updates), len(dir_deletes)
+            dir_alias = alias_map.get(target_dir, _short_path(target_dir))
 
-            for target_dir in targets:
-                dir_creates = [n for n, d in plan.creates if d == target_dir]
-                dir_deletes = [n for n, d in plan.deletes if d == target_dir]
-                dir_updates = [(n, r) for n, r, d in plan.updates if d == target_dir]
+            # 摘要行
+            parts = []
+            if c:
+                parts.append(f"{Color.GREEN}新增 {c}{Color.NC}")
+            if u:
+                parts.append(f"{Color.YELLOW}覆盖 {u}{Color.NC}")
+            if d:
+                parts.append(f"{Color.RED}删除 {d}{Color.NC}")
+            if same_count:
+                parts.append(f"{Color.CYAN}跳过 {same_count}{Color.NC}")
+            summary = "  ".join(parts) if parts else f"{Color.GREEN}无变更{Color.NC}"
+            print(f"  {Color.BOLD}{dir_alias}{Color.NC}  {summary}")
 
-                # 统计内容一致（跳过）的 skill
-                is_nested = target_dir in nested_targets
-                if is_nested:
-                    existing = {s.name for s in find_skills_in_source(target_dir)}
-                else:
-                    existing = set(find_skills_in_target(target_dir))
-                update_names = {n for n, _, d in plan.updates if d == target_dir}
-                same_skills = sorted(set(source_map.keys()) & existing - update_names)
-                same_count = len(same_skills)
-
-                c, u, d = len(dir_creates), len(dir_updates), len(dir_deletes)
-                dir_alias = alias_map.get(target_dir, _short_path(target_dir))
-
-                # 摘要行
-                parts = []
-                if c:
-                    parts.append(f"{Color.GREEN}新增 {c}{Color.NC}")
-                if u:
-                    parts.append(f"{Color.YELLOW}覆盖 {u}{Color.NC}")
-                if d:
-                    parts.append(f"{Color.RED}删除 {d}{Color.NC}")
-                if same_count:
-                    parts.append(f"{Color.CYAN}跳过 {same_count}{Color.NC}")
-                summary = "  ".join(parts) if parts else f"{Color.GREEN}无变更{Color.NC}"
-                print(f"  {Color.BOLD}{dir_alias}{Color.NC}  {summary}")
-
-                # 按类型逐行列出 skill（相对路径）
-                if c:
-                    print(f"    {Color.GREEN}新增:{Color.NC}")
-                    for name in sorted(dir_creates):
-                        src_rel = source_map.get(name, name)
-                        print(f"      {Color.GREEN}+{Color.NC} {name}  ← {base_alias}/{src_rel}")
-                if u:
-                    print(f"    {Color.YELLOW}覆盖:{Color.NC}")
-                    for name, src_rel in sorted(dir_updates):
-                        print(f"      {Color.YELLOW}~{Color.NC} {name}  ← {base_alias}/{src_rel}")
-                if d:
-                    print(f"    {Color.RED}删除:{Color.NC}")
-                    for name in sorted(dir_deletes):
-                        if is_nested:
-                            rel = find_skill_in_source_by_name(target_dir, name)
-                            path = f"{dir_alias}/{rel}" if rel else name
-                        else:
-                            path = f"{dir_alias}/{name}"
-                        print(f"      {Color.RED}-{Color.NC} {path}")
-                if same_skills:
-                    print(f"    {Color.CYAN}跳过: {same_count} 个（内容一致）{Color.NC}")
-                print()
+            # 按类型逐行列出 skill（相对路径）
+            if c:
+                print(f"    {Color.GREEN}新增:{Color.NC}")
+                for name in sorted(dir_creates):
+                    src_rel = source_map.get(name, name)
+                    print(f"      {Color.GREEN}+{Color.NC} {name}  ← {base_alias}/{src_rel}")
+            if u:
+                print(f"    {Color.YELLOW}覆盖:{Color.NC}")
+                for name, src_rel in sorted(dir_updates):
+                    print(f"      {Color.YELLOW}~{Color.NC} {name}  ← {base_alias}/{src_rel}")
+            if d:
+                print(f"    {Color.RED}删除:{Color.NC}")
+                for name in sorted(dir_deletes):
+                    if is_nested:
+                        rel = find_skill_in_source_by_name(target_dir, name)
+                        path = f"{dir_alias}/{rel}" if rel else name
+                    else:
+                        path = f"{dir_alias}/{name}"
+                    print(f"      {Color.RED}-{Color.NC} {path}")
+            if same_skills:
+                print(f"    {Color.CYAN}跳过: {same_count} 个（内容一致）{Color.NC}")
+            print()
 
     return True
 
@@ -687,7 +701,7 @@ def show_preview(plan: SyncPlan, source_dir: Path, targets: list[Path], force: b
 # ============================================================
 
 def execute_bidirectional(plan: SyncPlan, source_dir: Path, targets: list[Path]):
-    log_info("========== 阶段1：收集新增/修改的 skills ==========")
+    log_info("========== 执行同步 ==========")
     print(file=sys.stderr)
 
     collected = 0
@@ -700,7 +714,7 @@ def execute_bidirectional(plan: SyncPlan, source_dir: Path, targets: list[Path])
         shutil.copytree(from_dir / name, dest, copy_function=shutil.copy2)
         collected += 1
         collected_names.add(name)
-        log_success(f"  + 已收集到 Other/{name}")
+        log_success(f"  + {name} → Other/")
 
     updated = 0
     for name, source_rel, from_dir in plan.collect_update:
@@ -708,16 +722,7 @@ def execute_bidirectional(plan: SyncPlan, source_dir: Path, targets: list[Path])
         shutil.rmtree(dest)
         shutil.copytree(from_dir / name, dest, copy_function=shutil.copy2)
         updated += 1
-        log_success(f"  ~ 已更新: {source_rel}")
-
-    if collected + updated == 0:
-        log_info("没有发现新增或修改的 skills")
-    else:
-        log_success(f"收集完成: 新增 {collected} 个, 更新 {updated} 个")
-    print(file=sys.stderr)
-
-    log_info("========== 阶段2：分发 skills 到所有目标目录 ==========")
-    print(file=sys.stderr)
+        log_success(f"  ~ {name} ← {_short_path(from_dir)}")
 
     total_ops = 0
     for target_dir in targets:
@@ -726,30 +731,29 @@ def execute_bidirectional(plan: SyncPlan, source_dir: Path, targets: list[Path])
         dir_updates = [(n, r, d) for n, r, d in plan.updates if d == target_dir]
 
         if not dir_creates and not dir_deletes and not dir_updates:
-            log_info(f"跳过（无变更）: {target_dir}")
             continue
 
-        log_info(f"同步到: {target_dir}")
+        target_display = _short_path(target_dir)
+        log_info(f"同步到: {target_display}")
         target_dir.mkdir(parents=True, exist_ok=True)
 
         for name, _ in dir_deletes:
             shutil.rmtree(target_dir / name)
-            log_warning(f"  删除: {name}")
+            log_warning(f"  - {name}")
 
         for name, _ in dir_creates:
             source_rel = find_skill_in_source_by_name(source_dir, name)
             if source_rel:
                 shutil.copytree(source_dir / source_rel, target_dir / name, copy_function=shutil.copy2)
+                log_success(f"  + {name}")
 
         for name, source_rel, _ in dir_updates:
             skill_path = find_skill_path(target_dir, name)
             if skill_path:
                 shutil.rmtree(skill_path)
             shutil.copytree(source_dir / source_rel, target_dir / name, copy_function=shutil.copy2)
-            log_info(f"  覆盖: {name}")
+            log_success(f"  ~ {name}")
 
-        updated += len(dir_updates)
-        log_success(f"  ✓ 完成: 新增 {len(dir_creates)} 个, 删除 {len(dir_deletes)} 个, 覆盖 {len(dir_updates)} 个")
         total_ops += len(dir_creates) + len(dir_deletes) + len(dir_updates)
         print(file=sys.stderr)
 

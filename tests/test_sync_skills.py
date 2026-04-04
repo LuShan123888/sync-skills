@@ -262,6 +262,31 @@ class TestBidirectional:
         assert "无需同步" in captured.err
         assert "同步到" not in captured.err
 
+    def test_collect_update_distributes_to_other_targets(self, env):
+        """单个目标修改 skill 后，收集到源并分发到其他目标"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "old")
+        create_skill(target_a, "skill-a", "new-version")
+        create_skill(target_b, "skill-a", "old")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        # 应收集更新
+        assert len(plan.collect_update) == 1
+        assert plan.collect_update[0][0] == "skill-a"
+        assert plan.collect_update[0][2] == target_a
+        # 应生成 update 到 target_b（它有旧版本）
+        update_targets = [d for _, _, d in plan.updates]
+        assert target_b in update_targets
+        # 不应更新 target_a（它是来源）
+        assert target_a not in update_targets
+
+        # 执行
+        execute_bidirectional(plan, source, [target_a, target_b])
+        # 源应被更新
+        assert (source / "Code" / "skill-a" / "SKILL.md").read_text() == "new-version"
+        # target_b 应被更新
+        assert (target_b / "skill-a" / "SKILL.md").read_text() == "new-version"
+
 
 # ============================================================
 # 强制同步测试
