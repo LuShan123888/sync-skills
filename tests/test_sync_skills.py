@@ -714,8 +714,8 @@ class TestUserScenarios:
         with pytest.raises(SystemExit):
             run_main(source, [target_a, target_b])
 
-    def test_s4_source_updated_warns(self, env):
-        """S4: 源目录修改 skill → 双向模式检测为冲突"""
+    def test_s4_source_updated_auto_distributes(self, env):
+        """S4: 源目录修改 skill → 自动分发到所有目标（不再视为冲突）"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "old")
         create_skill(target_a, "skill-a", "old")
@@ -725,12 +725,14 @@ class TestUserScenarios:
         (source / "Code" / "skill-a" / "SKILL.md").write_text("updated-in-source")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        # 不应有 collect_update（因为是源更新，不是目标更新）
+        # 不应有冲突
+        assert not plan.has_conflicts
+        # 不应有 collect_update（源版本是最新，不需要收集）
         assert len(plan.collect_update) == 0
-        # 应有冲突（源不同于所有目标）
-        assert plan.has_conflicts
-        conflict_names = [name for name, _ in plan.conflicts]
-        assert "skill-a" in conflict_names
+        # 源版本应自动分发到目标（阶段2 的 creates/updates 处理）
+        # 由于内容不同，应该是 updates
+        update_targets = [d for _, _, d in plan.updates]
+        assert len(update_targets) == 2
 
     def test_s6_multi_target_conflict(self, env):
         """S6: 多个目标同时修改同一 skill → 冲突"""
@@ -971,17 +973,18 @@ class TestConflictResolution:
         assert not plan.has_conflicts
 
     def test_conflict_source_differs_from_all_targets(self, env):
-        """源不同于所有目标 → 冲突"""
+        """源不同于所有目标（源是 singleton）→ 自动解决：以源版本分发"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "modified-source")
         create_skill(target_a, "skill-a", "same-target")
         create_skill(target_b, "skill-a", "same-target")
 
         plan = preview_bidirectional(source, [target_a, target_b])
+        assert not plan.has_conflicts
         assert not plan.collect_update
-        assert plan.has_conflicts
-        conflict_names = [name for name, _ in plan.conflicts]
-        assert "skill-a" in conflict_names
+        # 源版本应自动分发到目标（阶段2 的 updates）
+        update_targets = [d for _, _, d in plan.updates]
+        assert len(update_targets) == 2
 
     def test_conflict_two_targets_disagree(self, env):
         """两个目标不一致 → 冲突"""
@@ -1067,22 +1070,19 @@ class TestConflictResolution:
         result = ask_conflict_resolution("skill-a", versions, auto_confirm=True)
         assert result is None
 
-    def test_resolve_conflicts_auto_mode(self, env):
-        """-y 模式下冲突转为 warning"""
+    def test_auto_resolve_source_singleton(self, env):
+        """源不同于所有目标（源是 singleton）→ 自动解决"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "source-ver")
         create_skill(target_a, "skill-a", "target-ver")
         create_skill(target_b, "skill-a", "target-ver")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        assert plan.has_conflicts
-
-        _resolve_conflicts(plan, auto_confirm=True)
-
-        # 冲突应被清空，转为 warning
+        # 源是 singleton → 自动解决，不应有冲突
         assert not plan.has_conflicts
-        assert len(plan.warnings) >= 1
-        assert any("skill-a" in w for w in plan.warnings)
+        # 源版本应自动分发到目标（阶段2 的 updates）
+        update_targets = [d for _, _, d in plan.updates]
+        assert len(update_targets) == 2
 
     def test_apply_resolutions_from_source(self, env):
         """选源版本 → 分发到所有目标"""

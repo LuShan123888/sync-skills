@@ -290,7 +290,7 @@ def preview_bidirectional(source_dir: Path, targets: list[Path],
     """生成双向同步计划。基于纯哈希分组检测冲突，不依赖 mtime 归因。"""
     plan = SyncPlan()
 
-    # 收集所有 skill 的版本信息（源 + 各目标）
+    # 阶段1 的分析：收集所有 skill 的版本信息
     # skill_name -> list[SkillVersion]
     skill_versions: dict[str, list[SkillVersion]] = {}
 
@@ -312,6 +312,8 @@ def preview_bidirectional(source_dir: Path, targets: list[Path],
             skill_versions.setdefault(skill_name, []).append(sv)
 
     # 分析每个 skill：按哈希分组，判断自动解决 or 冲突
+    # auto_distribute: 源是 singleton（源修改了，其他没动）→ 阶段2 需要分发更新
+    auto_distribute: set[str] = set()
     for skill_name, versions in skill_versions.items():
         # 按哈希分组
         hash_groups: dict[str, list[SkillVersion]] = {}
@@ -334,15 +336,21 @@ def preview_bidirectional(source_dir: Path, targets: list[Path],
                 plan.collect_new.append((skill_name, versions[0].path.parent))
             continue
 
-        # 源存在 + 多版本 → 分析是否可自动解决
+        # 源存在 + 2 个哈希组 → 分析是否可自动解决
         if len(hash_groups) == 2:
             # 按 group 大小排序，找到 singleton（只有 1 个位置的组）
             group_sizes = sorted(hash_groups.values(), key=len)
             singleton_group = group_sizes[0]
-            if len(singleton_group) == 1 and not singleton_group[0].is_source:
-                # 单个目标不同于其他（含源）→ 安全收集更新
-                source_rel = source_versions[0].source_rel
-                plan.collect_update.append((skill_name, source_rel, singleton_group[0].path.parent))
+            if len(singleton_group) == 1:
+                # 一个位置与其他不一致 → 自动解决：以 singleton 版本为准
+                singleton_sv = singleton_group[0]
+                if singleton_sv.is_source:
+                    # 源版本是最新 → 标记为需要分发更新
+                    auto_distribute.add(skill_name)
+                else:
+                    # 单个目标不同于其他（含源）→ 收集更新到源
+                    source_rel = source_versions[0].source_rel
+                    plan.collect_update.append((skill_name, source_rel, singleton_sv.path.parent))
                 continue
 
         # 无法自动解决 → 冲突
@@ -350,7 +358,8 @@ def preview_bidirectional(source_dir: Path, targets: list[Path],
 
     # 阶段2：计算分发变更（按 skill 粒度过滤目标）
     source_skills = find_skills_in_source(source_dir)
-    all_source_names = {s.name for s in source_skills}
+    source_map = {s.name: s.rel_path for s in source_skills}
+    all_source_names = set(source_map.keys())
     all_source_names.update(name for name, _ in plan.collect_new)
     et = exclude_tags or []
 
@@ -368,6 +377,14 @@ def preview_bidirectional(source_dir: Path, targets: list[Path],
         for name in all_source_names & target_names:
             if not _should_sync_to(name, source_dir, target_dir, et):
                 plan.deletes.append((name, target_dir))
+                continue
+            # 源和目标都有，内容不同 → 更新（仅限自动解决的 singleton 源场景）
+            if name in auto_distribute and name in source_map:
+                source_rel = source_map[name]
+                source_hash = skill_dir_hash(source_dir / source_rel)
+                target_hash = skill_dir_hash(target_dir / name)
+                if source_hash != target_hash:
+                    plan.updates.append((name, source_rel, target_dir))
 
     # 收集更新后，将新版本分发到其他有旧版本的目标
     for skill_name, source_rel, from_target_dir in plan.collect_update:

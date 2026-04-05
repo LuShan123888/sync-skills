@@ -102,6 +102,12 @@ sync-skills -y
 
 # 自定义目录 / Custom directories
 sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
+
+# 查询 skills
+sync-skills list                     # 列出所有 skills（按分类分组）
+sync-skills list --tags code         # 按标签过滤
+sync-skills search "review"          # 全文搜索
+sync-skills info skill-name         # 查看 skill 详情
 ```
 
 所有操作执行前都会展示预览，确认后才执行。
@@ -139,6 +145,7 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 | `--source DIR` | 源目录路径（默认 `~/Skills`，覆盖配置文件） |
 | `--targets DIR1,DIR2` | 目标目录，逗号分隔（覆盖配置文件） |
 | `--config PATH` | 配置文件路径（默认 `~/.config/sync-skills/config.toml`） |
+| `--tags TAG1,TAG2` | 按标签过滤（用于 `list` 命令） |
 | `init` | 交互式初始化配置 |
 
 ### 默认目录 / Default Directories
@@ -167,7 +174,7 @@ sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
 ## 开发 / Development
 
 ```bash
-uv run pytest tests/ -v    # 运行测试（90 个用例）
+uv run pytest tests/ -v    # 运行测试（154 个用例）
 ```
 
 ## License
@@ -235,6 +242,12 @@ sync-skills -y
 
 # Custom directories
 sync-skills --source ~/my-skills --targets ~/.claude/skills,~/.codex/skills
+
+# Query skills
+sync-skills list                     # List all skills (grouped by category)
+sync-skills list --tags code         # Filter by tags
+sync-skills search "review"          # Full-text search
+sync-skills info skill-name         # Show skill details
 ```
 
 ## Sync Modes
@@ -256,6 +269,7 @@ Source directory is the default base. Supports interactive base selection — ch
 | `--source DIR` | Source directory (default: `~/Skills`, overrides config) |
 | `--targets DIR1,DIR2` | Target directories, comma-separated (overrides config) |
 | `--config PATH` | Config file path (default: `~/.config/sync-skills/config.toml`) |
+| `--tags TAG1,TAG2` | Filter by tags (for `list` command) |
 | `init` | Interactive init wizard |
 
 ## Safety
@@ -270,7 +284,7 @@ Source directory is the default base. Supports interactive base selection — ch
 ## Development
 
 ```bash
-uv run pytest tests/ -v    # 77 test cases
+uv run pytest tests/ -v    # 154 test cases
 ```
 
 ## License
