@@ -219,6 +219,45 @@ def check_duplicate_names(skills: list[Skill]) -> list[tuple[str, str, str]]:
 
 
 # ============================================================
+# 选择性同步过滤
+# ============================================================
+
+def _get_skill_metadata(source_dir: Path, skill_name: str) -> "SkillMetadata":
+    """获取源目录中指定 skill 的元数据。skill 不存在时返回空元数据。"""
+    from .metadata import SkillMetadata, parse_frontmatter
+
+    skill_rel = find_skill_in_source_by_name(source_dir, skill_name)
+    if not skill_rel:
+        return SkillMetadata()
+    return parse_frontmatter(source_dir / skill_rel / "SKILL.md")
+
+
+def _should_sync_to(skill_name: str, source_dir: Path, target_dir: Path,
+                    exclude_tags: list[str]) -> bool:
+    """判断 skill 是否应同步到指定目标。"""
+    from .metadata import should_sync_to_target
+
+    meta = _get_skill_metadata(source_dir, skill_name)
+    return should_sync_to_target(meta, target_dir, exclude_tags)
+
+
+def _should_delete_from_target(skill_name: str, source_dir: Path, target_dir: Path,
+                               exclude_tags: list[str]) -> bool:
+    """判断 skill 是否应从目标中删除。
+
+    - skill 不在源中 → 应删除（多余 skill）
+    - skill 在源中但不允许同步到此目标（tools/tags 过滤）→ 应删除
+    """
+    from .metadata import should_sync_to_target
+
+    skill_rel = find_skill_in_source_by_name(source_dir, skill_name)
+    if not skill_rel:
+        return True  # 源中没有，多余 skill
+    meta = _get_skill_metadata(source_dir, skill_name)
+    return not should_sync_to_target(meta, target_dir, exclude_tags)
+
+
+# ============================================================
 # 预览阶段
 # ============================================================
 
@@ -246,7 +285,8 @@ def _fmt_time(mtime: float) -> str:
 
 
 
-def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
+def preview_bidirectional(source_dir: Path, targets: list[Path],
+                         exclude_tags: list[str] | None = None) -> SyncPlan:
     """生成双向同步计划。基于纯哈希分组检测冲突，不依赖 mtime 归因。"""
     plan = SyncPlan()
 
@@ -308,17 +348,26 @@ def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
         # 无法自动解决 → 冲突
         plan.conflicts.append((skill_name, versions))
 
-    # 阶段2：计算分发变更
+    # 阶段2：计算分发变更（按 skill 粒度过滤目标）
     source_skills = find_skills_in_source(source_dir)
     all_source_names = {s.name for s in source_skills}
     all_source_names.update(name for name, _ in plan.collect_new)
+    et = exclude_tags or []
 
     for target_dir in targets:
         target_names = set(find_skills_in_target(target_dir))
         for name in target_names - all_source_names:
-            plan.deletes.append((name, target_dir))
+            # 目标中多余（源中没有）：检查是否应排除
+            if _should_delete_from_target(name, source_dir, target_dir, et):
+                plan.deletes.append((name, target_dir))
         for name in all_source_names - target_names:
-            plan.creates.append((name, target_dir))
+            # 源中有但目标缺少：检查是否应同步到此目标
+            if _should_sync_to(name, source_dir, target_dir, et):
+                plan.creates.append((name, target_dir))
+        # 源和目标都有，但不应同步到此目标（tools/tags 过滤）→ 删除
+        for name in all_source_names & target_names:
+            if not _should_sync_to(name, source_dir, target_dir, et):
+                plan.deletes.append((name, target_dir))
 
     # 收集更新后，将新版本分发到其他有旧版本的目标
     for skill_name, source_rel, from_target_dir in plan.collect_update:
@@ -329,13 +378,15 @@ def preview_bidirectional(source_dir: Path, targets: list[Path]) -> SyncPlan:
             target_path = target_dir / skill_name
             if target_path.is_dir() and (target_path / "SKILL.md").is_file():
                 if skill_dir_hash(target_path) != from_hash:
-                    plan.updates.append((skill_name, source_rel, target_dir))
+                    if _should_sync_to(skill_name, source_dir, target_dir, et):
+                        plan.updates.append((skill_name, source_rel, target_dir))
 
     return plan
 
 
 def preview_force(source_dir: Path, targets: list[Path],
-                  original_source_dir: Path | None = None) -> SyncPlan:
+                  original_source_dir: Path | None = None,
+                  exclude_tags: list[str] | None = None) -> SyncPlan:
     """生成强制同步计划。original_source_dir 标记原始源目录（嵌套结构），当它作为目标时需要特殊处理。"""
     plan = SyncPlan()
     source_skills = find_skills_in_source(source_dir)
@@ -358,12 +409,20 @@ def preview_force(source_dir: Path, targets: list[Path],
         else:
             target_names = set(find_skills_in_target(target_dir))
 
+        et = exclude_tags or []
         for name in target_names - source_names:
+            # 目标中多余（源中没有）：应删除
             plan.deletes.append((name, target_dir))
         for name in source_names - target_names:
-            plan.creates.append((name, target_dir))
-        # 同名但内容不同 → 覆盖
+            # 源中有但目标缺少：检查是否应同步到此目标
+            if _should_sync_to(name, source_dir, target_dir, et):
+                plan.creates.append((name, target_dir))
+        # 同名但内容不同 → 覆盖（受选择性同步过滤）
+        # 同名且不应同步到此目标 → 删除
         for name in source_names & target_names:
+            if not _should_sync_to(name, source_dir, target_dir, et):
+                plan.deletes.append((name, target_dir))
+                continue
             source_hash = skill_dir_hash(source_dir / source_map[name])
             # 嵌套目录需要用实际路径计算哈希
             target_path = target_dir / target_map[name] if is_nested else target_dir / name
@@ -490,14 +549,18 @@ def _build_version_warning_from_versions(skill_name: str, versions: list[SkillVe
     return "\n".join(lines)
 
 
-def _apply_resolutions(plan: SyncPlan, source_dir: Path, targets: list[Path]) -> None:
+def _apply_resolutions(plan: SyncPlan, source_dir: Path, targets: list[Path],
+                       exclude_tags: list[str] | None = None) -> None:
     """将用户的冲突选择转换为 collect/creates/updates。"""
+    et = exclude_tags or []
     for r in plan.resolutions:
         chosen_skill_dir = r.chosen_path.parent
         if r.chosen_source_rel:
-            # 选了源版本 → 分发到所有目标
+            # 选了源版本 → 分发到所有目标（受选择性同步过滤）
             for target_dir in targets:
                 if not target_dir.is_dir():
+                    continue
+                if not _should_sync_to(r.skill_name, source_dir, target_dir, et):
                     continue
                 target_path = target_dir / r.skill_name
                 if target_path.is_dir() and (target_path / "SKILL.md").is_file():
@@ -514,12 +577,14 @@ def _apply_resolutions(plan: SyncPlan, source_dir: Path, targets: list[Path]) ->
                 plan.collect_update.append((r.skill_name, source_rel, chosen_skill_dir))
             else:
                 plan.collect_new.append((r.skill_name, chosen_skill_dir))
-            # 分发到其他目标
+            # 分发到其他目标（受选择性同步过滤）
             for target_dir in targets:
                 if not target_dir.is_dir():
                     continue
                 if target_dir == chosen_skill_dir:
                     continue  # 跳过来源目标
+                if not _should_sync_to(r.skill_name, source_dir, target_dir, et):
+                    continue
                 target_path = target_dir / r.skill_name
                 if target_path.is_dir() and (target_path / "SKILL.md").is_file():
                     target_hash = skill_dir_hash(target_path)
@@ -1026,22 +1091,167 @@ def _run_init_wizard(config_path: Path | None = None):
 
 
 # ============================================================
+# list/search/info 命令
+# ============================================================
+
+def _cmd_list(args: argparse.Namespace):
+    """列出所有 skills，按分类分组。"""
+    from .config import load_config
+    from .metadata import collect_all_metadata
+
+    config = load_config(args.config)
+    source_dir = args.source if args.source else config.source
+    filter_tags = args.tags or []
+
+    skills_with_meta = collect_all_metadata(source_dir)
+
+    # 按标签过滤
+    if filter_tags:
+        skills_with_meta = [
+            (s, m) for s, m in skills_with_meta
+            if any(t in m.tags for t in filter_tags)
+        ]
+
+    if not skills_with_meta:
+        print("  没有找到匹配的 skills")
+        return
+
+    # 按分类分组（rel_path 的第一个组件）
+    categories: dict[str, list[tuple[Skill, "SkillMetadata"]]] = {}
+    for skill, meta in sorted(skills_with_meta, key=lambda x: x[0].rel_path):
+        category = skill.rel_path.split("/")[0]
+        categories.setdefault(category, []).append((skill, meta))
+
+    total = 0
+    for category, items in categories.items():
+        print(f"\n  {Color.BOLD}{category}/{Color.NC}")
+        for skill, meta in items:
+            tags_str = ""
+            if meta.tags:
+                tags_str = f"  {Color.CYAN}[{', '.join(meta.tags)}]{Color.NC}"
+            tools_str = ""
+            if meta.tools:
+                tools_str = f"  {Color.YELLOW}→ {', '.join(meta.tools)}{Color.NC}"
+            desc_str = ""
+            if meta.description:
+                desc = meta.description.split("\n")[0][:60]
+                if len(meta.description.split("\n")[0]) > 60:
+                    desc += "..."
+                desc_str = f"  {desc}"
+            print(f"    {skill.name}{tags_str}{tools_str}{desc_str}")
+            total += 1
+
+    print(f"\n  共 {total} 个 skills")
+
+
+def _cmd_search(args: argparse.Namespace):
+    """全文搜索 skills。"""
+    from .config import load_config
+    from .metadata import search_skills
+
+    config = load_config(args.config)
+    source_dir = args.source if args.source else config.source
+
+    if not args.query:
+        log_error("请提供搜索关键词")
+        return
+
+    results = search_skills(source_dir, args.query)
+
+    if not results:
+        print(f"  没有找到匹配 '{args.query}' 的 skills")
+        return
+
+    print(f"  找到 {len(results)} 个匹配结果:\n")
+    for skill, meta in results:
+        print(f"  {Color.BOLD}{skill.name}{Color.NC}  ({skill.rel_path})")
+        if meta.description:
+            desc = meta.description.split("\n")[0][:80]
+            if len(meta.description.split("\n")[0]) > 80:
+                desc += "..."
+            print(f"    {desc}")
+        if meta.tags:
+            print(f"    标签: {', '.join(meta.tags)}")
+        if meta.tools:
+            print(f"    工具: {', '.join(meta.tools)}")
+        print()
+
+
+def _cmd_info(args: argparse.Namespace):
+    """查看 skill 详细信息。"""
+    from .config import load_config
+    from .metadata import parse_frontmatter
+
+    config = load_config(args.config)
+    source_dir = args.source if args.source else config.source
+
+    if not args.query:
+        log_error("请提供 skill 名称")
+        return
+
+    skill_name = args.query
+    skill_rel = find_skill_in_source_by_name(source_dir, skill_name)
+    if not skill_rel:
+        log_error(f"skill '{skill_name}' 不存在")
+        sys.exit(1)
+
+    skill_path = source_dir / skill_rel
+    meta = parse_frontmatter(skill_path / "SKILL.md")
+
+    print(f"\n  {Color.BOLD}{skill_name}{Color.NC}")
+    print(f"  路径: {_short_path(skill_path)}")
+
+    if meta.description:
+        print(f"\n  描述:")
+        for line in meta.description.split("\n"):
+            print(f"    {line}")
+
+    if meta.tags:
+        print(f"\n  标签: {', '.join(meta.tags)}")
+
+    if meta.tools:
+        print(f"  同步目标: {', '.join(meta.tools)}")
+    else:
+        print(f"  同步目标: 所有目标")
+
+    if meta.version:
+        print(f"  版本: {meta.version}")
+
+    # 显示当前已同步到的目标
+    targets = [t.path for t in config.targets]
+    synced = [t for t in targets if t.is_dir() and find_skill_path(t, skill_name)]
+    if synced:
+        print(f"\n  已同步到:")
+        for t in synced:
+            print(f"    {_short_path(t)}")
+
+    print()
+
+
+# ============================================================
 # CLI
 # ============================================================
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Skills 同步工具")
-    parser.add_argument("command", nargs="?", default=None, help="子命令：init（初始化配置）")
+    parser.add_argument("command", nargs="?", default=None,
+                        choices=["init", "list", "search", "info"],
+                        help="子命令：init, list, search, info")
+    parser.add_argument("query", nargs="?", default=None,
+                        help="搜索关键词 (search) 或 skill 名称 (info)")
     parser.add_argument("--config", type=Path, default=None, help="配置文件路径")
     parser.add_argument("--force", "-f", action="store_true", help="强制同步模式（可选择任意目录为基准同步到其他目录）")
     parser.add_argument("--delete", "-d", type=str, metavar="SKILL_NAME", help="删除指定的 skill（从源目录和所有目标目录）")
     parser.add_argument("-y", "--yes", action="store_true", help="跳过确认")
     parser.add_argument("--source", type=Path, default=None, help="源目录路径（覆盖配置文件）")
     parser.add_argument("--targets", type=str, default=None, help="目标目录路径，逗号分隔（覆盖配置文件）")
+    parser.add_argument("--tags", type=str, default=None, help="按标签过滤（逗号分隔，用于 list 命令）")
     args = parser.parse_args(argv)
 
     if args.targets:
         args.targets = [Path(t.strip()) for t in args.targets.split(",")]
+    if args.tags:
+        args.tags = [t.strip() for t in args.tags.split(",")]
 
     return args
 
@@ -1052,6 +1262,17 @@ def main(argv: list[str] | None = None):
     # init 子命令
     if args.command == "init":
         _run_init_wizard(config_path=args.config)
+        return
+
+    # list/search/info 子命令（只需要配置中的 source，不需要完整同步流程）
+    if args.command == "list":
+        _cmd_list(args)
+        return
+    if args.command == "search":
+        _cmd_search(args)
+        return
+    if args.command == "info":
+        _cmd_info(args)
         return
 
     # 加载配置
@@ -1066,6 +1287,14 @@ def main(argv: list[str] | None = None):
     if args.delete:
         execute_delete(args.delete, source_dir, targets, args.yes)
         return
+
+    # 选择性同步：检查未知工具引用
+    from .metadata import warn_unknown_tools
+    unknown_warnings = warn_unknown_tools(source_dir, targets)
+    for w in unknown_warnings:
+        log_warning(w)
+
+    exclude_tags = config.exclude_tags
 
     mode = "强制同步" if force else "双向同步"
     print(f"{'═' * 40}")
@@ -1113,7 +1342,7 @@ def main(argv: list[str] | None = None):
         # 当源目录作为目标时，需要保留其嵌套分类结构
         orig_source = source_dir if source_dir != base_dir else None
         nested = {orig_source} if orig_source else set()
-        plan = preview_force(base_dir, other_dirs, original_source_dir=orig_source)
+        plan = preview_force(base_dir, other_dirs, original_source_dir=orig_source, exclude_tags=exclude_tags)
 
         if not show_preview(plan, base_dir, other_dirs, force=True,
                             alias_map=alias_map, nested_targets=nested):
@@ -1135,12 +1364,12 @@ def main(argv: list[str] | None = None):
         print(f"  {Color.GREEN}✓ 同步完成{Color.NC}  {'  '.join(parts)}")
     else:
         bidir_alias_map = _build_alias_map(source_dir, targets)
-        plan = preview_bidirectional(source_dir, targets)
+        plan = preview_bidirectional(source_dir, targets, exclude_tags=exclude_tags)
 
         # 交互式冲突解决（非 -y 模式）
         if plan.has_conflicts:
             _resolve_conflicts(plan, args.yes)
-            _apply_resolutions(plan, source_dir, targets)
+            _apply_resolutions(plan, source_dir, targets, exclude_tags=exclude_tags)
 
         if not show_preview(plan, source_dir, targets, force=False, alias_map=bidir_alias_map):
             log_success("无需同步")

@@ -17,6 +17,7 @@ class Target:
 class Config:
     source: Path = field(default_factory=lambda: DEFAULT_SOURCE)
     targets: list[Target] = field(default_factory=list)
+    exclude_tags: list[str] = field(default_factory=list)
 
     @classmethod
     def from_defaults(cls) -> "Config":
@@ -70,7 +71,13 @@ def load_config(config_path: Path | None = None) -> Config:
     if not targets:
         targets = [Target(name="builtin", path=p) for p in DEFAULT_TARGETS]
 
-    return Config(source=source, targets=targets)
+    # 解析 [sync] 段
+    sync_section = data.get("sync", {})
+    exclude_tags = sync_section.get("exclude_tags", [])
+    if not isinstance(exclude_tags, list):
+        exclude_tags = []
+
+    return Config(source=source, targets=targets, exclude_tags=exclude_tags)
 
 
 def save_config(config: Config, config_path: Path | None = None) -> None:
@@ -92,6 +99,14 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         lines.append(f'[[targets]]')
         lines.append(f'name = "{t["name"]}"')
         lines.append(f'path = "{t["path"]}"')
+        lines.append("")
+
+    # [sync] 段（仅 exclude_tags 非空时写入）
+    if config.exclude_tags:
+        lines.append("# 同步过滤")
+        lines.append("[sync]")
+        tags_str = ", ".join(f'"{tag}"' for tag in config.exclude_tags)
+        lines.append(f'exclude_tags = [{tags_str}]')
         lines.append("")
 
     with open(path, "w", encoding="utf-8") as f:

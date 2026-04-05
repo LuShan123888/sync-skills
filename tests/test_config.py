@@ -118,6 +118,58 @@ class TestSaveConfig:
         assert "~/Skills" in content
         assert "~/.test/skills" in content
 
+    def test_save_with_exclude_tags(self, tmp_path):
+        config = Config(
+            source=Path.home() / "Skills",
+            targets=[Target(name="test", path=Path.home() / ".test" / "skills")],
+            exclude_tags=["wip", "experimental"],
+        )
+        config_file = tmp_path / "config.toml"
+        save_config(config, config_path=config_file)
+        content = config_file.read_text()
+        assert "[sync]" in content
+        assert "exclude_tags" in content
+
+    def test_save_without_exclude_tags(self, tmp_path):
+        config = Config(
+            source=Path.home() / "Skills",
+            targets=[Target(name="test", path=Path.home() / ".test" / "skills")],
+        )
+        config_file = tmp_path / "config.toml"
+        save_config(config, config_path=config_file)
+        content = config_file.read_text()
+        assert "[sync]" not in content
+
+
+class TestExcludeTags:
+    def test_load_config_with_exclude_tags(self, tmp_path):
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            'source = "~/Skills"\n'
+            '\n'
+            '[sync]\n'
+            'exclude_tags = ["wip", "experimental"]\n'
+        )
+        config = load_config(config_file)
+        assert config.exclude_tags == ["wip", "experimental"]
+
+    def test_load_config_without_exclude_tags(self, tmp_path):
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('source = "~/Skills"\n')
+        config = load_config(config_file)
+        assert config.exclude_tags == []
+
+    def test_load_config_with_empty_exclude_tags(self, tmp_path):
+        config_file = tmp_path / "config.toml"
+        config_file.write_text(
+            'source = "~/Skills"\n'
+            '\n'
+            '[sync]\n'
+            'exclude_tags = []\n'
+        )
+        config = load_config(config_file)
+        assert config.exclude_tags == []
+
 
 class TestDetectInstalledTools:
     def test_detect_existing(self, tmp_path, monkeypatch):

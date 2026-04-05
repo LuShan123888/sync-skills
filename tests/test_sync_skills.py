@@ -1163,3 +1163,251 @@ class TestConflictResolution:
         # 两个目标都应被更新为源版本
         assert (target_a / "skill-a" / "SKILL.md").read_text() == "source-ver"
         assert (target_b / "skill-a" / "SKILL.md").read_text() == "source-ver"
+
+
+# ============================================================
+# TestSelectiveSync
+# ============================================================
+
+
+class TestSelectiveSync:
+    """选择性同步：tools 和 exclude_tags 过滤
+
+    注意：get_target_tool_name 提取 target_path.parent.name，
+    所以测试需要使用 ~/.claude/skills 风格的路径结构。
+    """
+
+    @staticmethod
+    def _make_targets(tmp_path: Path):
+        """创建模拟真实路径结构的目标目录"""
+        claude = tmp_path / ".claude" / "skills"
+        codex = tmp_path / ".codex" / "skills"
+        claude.mkdir(parents=True)
+        codex.mkdir(parents=True)
+        return claude, codex
+
+    def test_tools_field_filters_creates_bidirectional(self, env):
+        """tools: [claude] 的 skill 只同步到 .claude 目标"""
+        source = env[0]
+        claude, codex = self._make_targets(env[0].parent)
+        create_skill_in_category(source, "Code", "skill-a", "---\ntools: [claude]\n---\n# skill-a\n")
+
+        plan = preview_bidirectional(source, [claude, codex])
+        creates_claude = [n for n, d in plan.creates if d == claude]
+        creates_codex = [n for n, d in plan.creates if d == codex]
+        assert "skill-a" in creates_claude
+        assert "skill-a" not in creates_codex
+
+    def test_tools_field_filters_creates_force(self, env):
+        """tools: [claude] 的 skill 在 force 模式下只同步到 .claude 目标"""
+        source = env[0]
+        claude, codex = self._make_targets(env[0].parent)
+        create_skill_in_category(source, "Code", "skill-a", "---\ntools: [claude]\n---\n# skill-a\n")
+
+        plan = preview_force(source, [claude, codex])
+        creates_claude = [n for n, d in plan.creates if d == claude]
+        creates_codex = [n for n, d in plan.creates if d == codex]
+        assert "skill-a" in creates_claude
+        assert "skill-a" not in creates_codex
+
+    def test_exclude_tags_skips_skill(self, env):
+        """exclude_tags 中的标签阻止 skill 同步"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "---\ntags: [wip]\n---\n# skill-a\n")
+
+        plan = preview_bidirectional(source, [target_a, target_b], exclude_tags=["wip"])
+        assert len(plan.creates) == 0
+
+    def test_no_metadata_syncs_to_all(self, env):
+        """无 frontmatter 的 skill 同步到所有目标"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "# skill-a\n")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        creates_a = [n for n, d in plan.creates if d == target_a]
+        creates_b = [n for n, d in plan.creates if d == target_b]
+        assert "skill-a" in creates_a
+        assert "skill-a" in creates_b
+
+    def test_empty_tools_syncs_to_all(self, env):
+        """tools: [] 的 skill 同步到所有目标"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "---\ntools: []\n---\n# skill-a\n")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        creates_a = [n for n, d in plan.creates if d == target_a]
+        creates_b = [n for n, d in plan.creates if d == target_b]
+        assert "skill-a" in creates_a
+        assert "skill-a" in creates_b
+
+    def test_selective_sync_deletes_from_excluded_target(self, env):
+        """双向同步：已在不应同步的目标中存在的 skill 应被删除"""
+        source = env[0]
+        claude, codex = self._make_targets(env[0].parent)
+        create_skill_in_category(source, "Code", "skill-a", "---\ntools: [claude]\n---\n# skill-a\n")
+        # skill-a 已在 codex 中（之前同步的）
+        create_skill(codex, "skill-a", "---\ntools: [claude]\n---\n# skill-a\n")
+
+        plan = preview_bidirectional(source, [claude, codex])
+        deletes_codex = [n for n, d in plan.deletes if d == codex]
+        assert "skill-a" in deletes_codex
+
+    def test_force_deletes_from_excluded_target(self, env):
+        """强制同步：已在不应同步的目标中存在的 skill 应被删除"""
+        source = env[0]
+        claude, codex = self._make_targets(env[0].parent)
+        create_skill_in_category(source, "Code", "skill-a", "---\ntools: [claude]\n---\n# skill-a\n")
+        create_skill(codex, "skill-a", "---\ntools: [claude]\n---\n# skill-a\n")
+
+        plan = preview_force(source, [claude, codex])
+        deletes_codex = [n for n, d in plan.deletes if d == codex]
+        assert "skill-a" in deletes_codex
+
+    def test_unknown_tool_warns(self, env):
+        """引用未知工具的 skill 产生警告"""
+        from sync_skills.metadata import warn_unknown_tools
+
+        source, target_a, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "---\ntools: [nonexistent]\n---\n# skill-a\n")
+
+        warnings = warn_unknown_tools(source, [target_a])
+        assert len(warnings) == 1
+        assert "nonexistent" in warnings[0]
+
+    def test_end_to_end_force_selective(self, env):
+        """端到端：force 模式下选择性同步正确执行"""
+        source = env[0]
+        claude, codex = self._make_targets(env[0].parent)
+        create_skill_in_category(source, "Code", "skill-a", "---\ntools: [claude]\n---\n# skill-a\n")
+
+        plan = preview_force(source, [claude, codex])
+        execute_force(plan, source, [claude, codex])
+
+        # skill-a 应只在 claude
+        assert (claude / "skill-a" / "SKILL.md").is_file()
+        assert not (codex / "skill-a").exists()
+
+    def test_collected_skill_respects_tools(self, env):
+        """收集的 skill 根据 tools 字段选择性分发"""
+        source = env[0]
+        claude, codex = self._make_targets(env[0].parent)
+        # codex 中有一个 skill 指定了只同步到 claude
+        create_skill(codex, "skill-x", "---\ntools: [claude]\n---\n# skill-x\n")
+
+        plan = preview_bidirectional(source, [claude, codex])
+        # skill-x 应被收集到源
+        collect_names = [n for n, _ in plan.collect_new]
+        assert "skill-x" in collect_names
+        # 分发时只到 claude（codex 已有，不需要创建）
+        creates_claude = [n for n, d in plan.creates if d == claude]
+        assert "skill-x" in creates_claude
+
+
+# ============================================================
+# TestListCommand
+# ============================================================
+
+
+class TestListCommand:
+    def test_list_all_skills(self, env, capsys):
+        source, _, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "---\ntags: [code]\n---\n# skill-a\n")
+        create_skill_in_category(source, "Lark", "skill-b", "---\ntags: [lark]\n---\n# skill-b\n")
+
+        config_file = env[0].parent / "config.toml"
+        config_file.write_text(f'source = "{source}"\n')
+        main(["list", "--config", str(config_file)])
+        captured = capsys.readouterr()
+        assert "Code/" in captured.out
+        assert "Lark/" in captured.out
+        assert "skill-a" in captured.out
+        assert "skill-b" in captured.out
+        assert "共 2 个" in captured.out
+
+    def test_list_filter_by_tags(self, env, capsys):
+        source, _, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "---\ntags: [code, git]\n---\n# skill-a\n")
+        create_skill_in_category(source, "Lark", "skill-b", "---\ntags: [lark]\n---\n# skill-b\n")
+
+        config_file = env[0].parent / "config.toml"
+        config_file.write_text(f'source = "{source}"\n')
+        main(["list", "--tags", "code", "--config", str(config_file)])
+        captured = capsys.readouterr()
+        assert "skill-a" in captured.out
+        assert "skill-b" not in captured.out
+
+    def test_list_empty_source(self, env, capsys):
+        source, _, _ = env
+        config_file = env[0].parent / "config.toml"
+        config_file.write_text(f'source = "{source}"\n')
+        main(["list", "--config", str(config_file)])
+        captured = capsys.readouterr()
+        assert "没有找到" in captured.out
+
+    def test_list_with_custom_source(self, env, capsys):
+        source, _, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "# skill-a\n")
+        main(["list", "--source", str(source)])
+        captured = capsys.readouterr()
+        assert "skill-a" in captured.out
+
+
+# ============================================================
+# TestSearchCommand
+# ============================================================
+
+
+class TestSearchCommand:
+    def test_search_finds_match(self, env, capsys):
+        source, _, _ = env
+        create_skill_in_category(source, "Code", "git-commit",
+                                 '---\ndescription: "代码提交工具"\n---\n# git-commit\n')
+        main(["search", "代码提交", "--source", str(source)])
+        captured = capsys.readouterr()
+        assert "git-commit" in captured.out
+        assert "找到 1 个" in captured.out
+
+    def test_search_no_match(self, env, capsys):
+        source, _, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "# skill-a\n")
+        main(["search", "nonexistent", "--source", str(source)])
+        captured = capsys.readouterr()
+        assert "没有找到" in captured.out
+
+    def test_search_with_custom_source(self, env, capsys):
+        source, _, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "---\ntags: [code]\n---\n# skill-a\n")
+        main(["search", "code", "--source", str(source)])
+        captured = capsys.readouterr()
+        assert "skill-a" in captured.out
+
+
+# ============================================================
+# TestInfoCommand
+# ============================================================
+
+
+class TestInfoCommand:
+    def test_info_existing_skill(self, env, capsys):
+        source, _, _ = env
+        create_skill_in_category(source, "Code", "skill-a",
+                                 '---\ntags: [code]\ndescription: "测试 skill"\nversion: "1.0"\n---\n# skill-a\n')
+        main(["info", "skill-a", "--source", str(source)])
+        captured = capsys.readouterr()
+        assert "skill-a" in captured.out
+        assert "code" in captured.out
+        assert "测试 skill" in captured.out
+        assert "1.0" in captured.out
+
+    def test_info_nonexistent_skill(self, env):
+        source, _, _ = env
+        with pytest.raises(SystemExit):
+            main(["info", "nonexistent", "--source", str(source)])
+
+    def test_info_with_custom_source(self, env, capsys):
+        source, _, _ = env
+        create_skill_in_category(source, "Code", "skill-a", "# skill-a\n")
+        main(["info", "skill-a", "--source", str(source)])
+        captured = capsys.readouterr()
+        assert "skill-a" in captured.out
+        assert "所有目标" in captured.out

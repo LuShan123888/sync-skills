@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv run python -m pytest tests/ -v          # run all tests (90 cases)
+uv run python -m pytest tests/ -v          # run all tests (154 cases)
 uv run python -m pytest tests/ -v -k test_collect_new_skill  # run single test
 uv sync                          # install dependencies
 sync-skills                      # run (after pip install -e .)
@@ -14,26 +14,31 @@ sync-skills init                 # interactive config wizard
 sync-skills --delete skill-name  # delete skill from source + all targets
 sync-skills -d skill-name -y     # delete with auto-confirm
 sync-skills --config /path/to/config.toml  # use custom config
+sync-skills list                 # list all skills grouped by category
+sync-skills list --tags code     # filter by tags
+sync-skills search "review"      # full-text search
+sync-skills info skill-name      # show skill details
 ```
 
 ## Architecture
 
-Package-based CLI tool (`src/sync_skills/`, zero external dependencies, Python >= 3.11) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
+Package-based CLI tool (`src/sync_skills/`, Python >= 3.11, depends on PyYAML) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
 
 ### Package structure
 
 ```
 src/sync_skills/
-├── __init__.py      # version export (__version__ = "0.3.0")
+├── __init__.py      # version export (__version__ = "0.4.0")
 ├── constants.py     # DEFAULT_SOURCE, DEFAULT_TARGETS, KNOWN_TOOLS, CONFIG_FILE
 ├── config.py        # Config/Target dataclasses, load/save TOML, detect_installed_tools
-└── cli.py           # all sync logic, CLI parsing, init wizard, conflict resolution
+├── metadata.py      # SKILL.md frontmatter parsing (PyYAML), SkillMetadata, search/filter
+└── cli.py           # all sync logic, CLI parsing, init wizard, conflict resolution, list/search/info
 ```
 
 ### Core flow: Scan → Plan → Conflict Resolution → Preview → Confirm → Execute → Verify
 
 1. **Scan**: `find_skills_in_source()` (recursive, nested categories) and `find_skills_in_target()` (flat, skips hidden dirs)
-2. **Plan**: `preview_bidirectional()` builds a `SyncPlan` using pure hash-based conflict detection (no mtime dependency)
+2. **Plan**: `preview_bidirectional()` builds a `SyncPlan` using pure hash-based conflict detection (no mtime dependency). Respects `tools`/`exclude_tags` for selective sync.
 3. **Conflict Resolution** (bidirectional mode): `_resolve_conflicts()` interactively resolves conflicts; `_apply_resolutions()` converts choices to collect/create/update operations
 4. **Preview**: `show_preview()` displays the diff with conflict resolution results
 5. **Execute**: `execute_bidirectional()` or `execute_force()` applies the plan via `shutil.copytree`/`rmtree`
@@ -46,7 +51,22 @@ src/sync_skills/
 - **Targets** (flat): each tool's skills dir. Categories are flattened — only the leaf directory name matters
 - **Bidirectional mode**: collects new/updated skills from targets into `~/Skills/Other/`, then distributes all skills to targets. Interactive conflict resolution for ambiguous cases.
 - **Force mode**: supports interactive base directory selection (`--force` without `-y`). When source dir is a target, preserves nested structure (new skills go to `Other/`, deletes use recursive lookup). Uses MD5 content hash comparison — identical skills are skipped without re-copying.
+- **Selective sync**: `tools` field in SKILL.md frontmatter controls which targets a skill syncs to; `exclude_tags` in config.toml excludes skills with matching tags from all targets
 - Duplicate skill names across categories are a fatal error (would conflict when flattened)
+
+### SKILL.md frontmatter (optional)
+
+```yaml
+---
+tags: [code, review]
+description: "代码审查工具"
+tools: [claude, codex]  # only sync to these targets (empty = all)
+---
+```
+
+- Parsed by `metadata.py` using PyYAML
+- `tools` maps to target path parent name: `~/.claude/skills` → `"claude"`
+- Missing/empty fields → sync to all targets (backward compatible)
 
 ### Conflict detection (pure hash, v0.3.0)
 
@@ -64,7 +84,7 @@ src/sync_skills/
 
 - **Interactive mode** (default): `ask_conflict_resolution()` presents all versions with hash prefix, mtime hint, and SKILL.md preview. User selects version or skips.
 - **Auto mode** (`-y`): conflicts are converted to warnings (same as v0.2 behavior), sync proceeds without resolving conflicts.
-- **Resolution application**: `_apply_resolutions()` converts user choices to `collect_update`/`creates`/`updates` operations.
+- **Resolution application**: `_apply_resolutions()` converts user choices to `collect_update`/`creates`/`updates` operations. Respects selective sync filtering.
 - **Preview display**: resolved conflicts shown in a dedicated "冲突解决" section.
 
 ### Content comparison
@@ -76,13 +96,14 @@ src/sync_skills/
 
 ### Test structure
 
-Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`, `TestBaseSelection`, `TestConflictResolution`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation.
+Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`, `TestBaseSelection`, `TestConflictResolution`, `TestSelectiveSync`, `TestListCommand`, `TestSearchCommand`, `TestInfoCommand`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation.
 
 Additional test files:
-- `tests/test_config.py` — Config module tests (load, save, path expand/unexpand, detect tools): 15 tests
+- `tests/test_config.py` — Config module tests (load, save, path expand/unexpand, detect tools, exclude_tags): 18 tests
 - `tests/test_init.py` — Init wizard tests (config creation, default/custom source): 3 tests
+- `tests/test_metadata.py` — Metadata module tests (frontmatter parsing, filtering, search): 36 tests
 
-Total: 90 tests.
+Total: 154 tests.
 
 ### Delete command
 
@@ -110,6 +131,10 @@ Stored at `~/.config/sync-skills/config.toml` (or custom path via `--config`):
 ```toml
 source = "~/Skills"
 
+# 同步过滤（可选）
+[sync]
+exclude_tags = ["experimental", "wip"]
+
 [[targets]]
 name = "Claude Code"
 path = "~/.claude/skills"
@@ -123,7 +148,7 @@ path = "~/.claude/skills"
 See `docs/DESIGN.md` for:
 - 用户场景与预期行为（第 3 节）— 所有同步场景的完整定义
 - 当前已知限制（第 4 节）
-- 演进规划（第 5 节）— Phase 2: 内容感知同步（已完成）
+- 演进规划（第 5 节）— Phase 3: 元数据与索引（已完成）
 - 变更日志（第 7 节）— 每次讨论的关键决策和代码变更记录
 
 ## Cross-session workflow
@@ -137,6 +162,6 @@ See `docs/DESIGN.md` for:
 
 ## Current status
 
-- **版本**: v0.3.0（内容感知同步 + 交互式冲突解决）
-- **Phase 2 已完成**: 纯哈希冲突检测、交互式冲突选择界面、-y 模式兼容、90 个测试
-- **下一步**: Phase 3 — Skill 元数据与索引（标签、搜索、选择性同步）
+- **版本**: v0.4.0（元数据与索引 + 选择性同步）
+- **Phase 3 已完成**: SKILL.md frontmatter 解析、list/search/info 命令、tools/exclude_tags 选择性同步、154 个测试
+- **下一步**: Phase 4 — Skill 化封装（将 sync-skills 自身封装为 skill）
