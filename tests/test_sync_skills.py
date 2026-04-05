@@ -1411,3 +1411,79 @@ class TestInfoCommand:
         captured = capsys.readouterr()
         assert "skill-a" in captured.out
         assert "所有目标" in captured.out
+
+
+# ============================================================
+# TestDryRun
+# ============================================================
+
+
+class TestDryRun:
+    """测试 --dry-run 参数"""
+
+    def test_dry_run_flag_in_args(self):
+        from sync_skills.cli import parse_args
+        args = parse_args(["--dry-run"])
+        assert args.dry_run is True
+
+    def test_dry_run_bidirectional_with_changes(self, env, capsys):
+        """有新 skill 时，dry-run 应显示预览但不执行复制"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_a, "new-skill", "new")
+        create_skill(target_b, "skill-a", "a")
+
+        main(["--dry-run", "-y", "--source", str(source),
+              "--targets", f"{target_a},{target_b}"])
+        captured = capsys.readouterr()
+
+        # 应显示预览信息
+        assert "new-skill" in captured.out or "new-skill" in captured.err
+        # dry-run 提示
+        assert "dry-run" in captured.err
+        # 新 skill 不应被复制到 target_b
+        assert not (target_b / "new-skill").exists()
+        # 新 skill 不应被收集到源目录
+        assert not (source / "Other" / "new-skill").exists()
+
+    def test_dry_run_force_mode(self, env, capsys):
+        """force + dry-run 应预览但不执行"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill_in_category(source, "Code", "skill-b", "b")
+        # target_a 只有 skill-a，缺少 skill-b
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_b, "skill-a", "a")
+
+        main(["--force", "--dry-run", "-y", "--source", str(source),
+              "--targets", f"{target_a},{target_b}"])
+        captured = capsys.readouterr()
+
+        assert "dry-run" in captured.err
+        # skill-b 不应被复制到 target_a
+        assert not (target_a / "skill-b").exists()
+
+    def test_dry_run_delete(self, env, capsys):
+        """delete + dry-run 应显示预览但不删除"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "to-delete", "del")
+        create_skill(target_a, "to-delete", "del")
+        create_skill(target_b, "to-delete", "del")
+
+        main(["--delete", "to-delete", "--dry-run", "-y",
+              "--source", str(source), "--targets", f"{target_a},{target_b}"])
+        captured = capsys.readouterr()
+
+        assert "dry-run" in captured.err
+        # skill 不应被删除
+        assert (source / "Code" / "to-delete").exists()
+        assert (target_a / "to-delete").exists()
+        assert (target_b / "to-delete").exists()
+
+    def test_dry_run_delete_nonexistent(self, env):
+        """delete + dry-run 对不存在的 skill 仍应报错"""
+        source, target_a, target_b = env
+        with pytest.raises(SystemExit):
+            main(["--delete", "nonexistent", "--dry-run", "-y",
+                  "--source", str(source), "--targets", f"{target_a},{target_b}"])

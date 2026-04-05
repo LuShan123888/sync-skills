@@ -5,11 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv run python -m pytest tests/ -v          # run all tests (154 cases)
+uv run python -m pytest tests/ -v          # run all tests (159 cases)
 uv run python -m pytest tests/ -v -k test_collect_new_skill  # run single test
 uv sync                          # install dependencies
 sync-skills                      # run (after pip install -e .)
 sync-skills --force -y           # force sync, skip confirm
+sync-skills --dry-run            # preview changes without executing
 sync-skills init                 # interactive config wizard
 sync-skills --delete skill-name  # delete skill from source + all targets
 sync-skills -d skill-name -y     # delete with auto-confirm
@@ -28,7 +29,7 @@ Package-based CLI tool (`src/sync_skills/`, Python >= 3.11, depends on PyYAML) t
 
 ```
 src/sync_skills/
-├── __init__.py      # version export (__version__ = "0.4.0")
+├── __init__.py      # version export (__version__ = "0.5.0")
 ├── constants.py     # DEFAULT_SOURCE, DEFAULT_TARGETS, KNOWN_TOOLS, CONFIG_FILE
 ├── config.py        # Config/Target dataclasses, load/save TOML, detect_installed_tools
 ├── metadata.py      # SKILL.md frontmatter parsing (PyYAML), SkillMetadata, search/filter
@@ -96,14 +97,14 @@ tools: [claude, codex]  # only sync to these targets (empty = all)
 
 ### Test structure
 
-Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`, `TestBaseSelection`, `TestConflictResolution`, `TestSelectiveSync`, `TestListCommand`, `TestSearchCommand`, `TestInfoCommand`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation.
+Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`, `TestBaseSelection`, `TestConflictResolution`, `TestSelectiveSync`, `TestListCommand`, `TestSearchCommand`, `TestInfoCommand`, `TestDryRun`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation.
 
 Additional test files:
 - `tests/test_config.py` — Config module tests (load, save, path expand/unexpand, detect tools, exclude_tags): 18 tests
 - `tests/test_init.py` — Init wizard tests (config creation, default/custom source): 3 tests
 - `tests/test_metadata.py` — Metadata module tests (frontmatter parsing, filtering, search): 36 tests
 
-Total: 154 tests.
+Total: 159 tests.
 
 ### Delete command
 
@@ -162,6 +163,6 @@ See `docs/DESIGN.md` for:
 
 ## Current status
 
-- **版本**: v0.4.0（元数据与索引 + 选择性同步）
-- **Phase 3 已完成**: SKILL.md frontmatter 解析、list/search/info 命令、tools/exclude_tags 选择性同步、154 个测试
-- **下一步**: Phase 4 — Skill 化封装（将 sync-skills 自身封装为 skill）
+- **版本**: v0.5.0（Skill 化封装 + AI 友好 CLI）
+- **Phase 4 已完成**: `--dry-run`、改进 help 输出（英文、epilog 示例）、`skills/sync-skills/SKILL.md`、159 个测试
+- **下一步**: Phase 5 — 多端与协作（v1.0 远期）

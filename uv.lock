@@ -143,7 +143,7 @@ wheels = [
 
 [[package]]
 name = "sync-skills"
-version = "0.3.20260405.1"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "pyyaml" },

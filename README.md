@@ -93,6 +93,10 @@ sync-skills
 # Force: source is truth, remove extras from targets
 sync-skills --force
 
+# 预览变更：显示计划但不执行
+# Preview: show plan without executing
+sync-skills --dry-run
+
 # 删除指定 skill：从源目录和所有目标目录中删除
 # Delete a skill: remove from source and all targets
 sync-skills --delete skill-name
@@ -140,6 +144,7 @@ sync-skills info skill-name         # 查看 skill 详情
 | 参数 | 说明 |
 |------|------|
 | `--force`, `-f` | 强制同步（可选择任意目录为基准，覆盖内容不同的，删除多余的） |
+| `--dry-run` | 预览模式：显示变更计划但不执行 |
 | `--delete NAME`, `-d NAME` | 删除指定 skill（从源目录和所有目标目录） |
 | `-y`, `--yes` | 跳过确认提示 |
 | `--source DIR` | 源目录路径（默认 `~/Skills`，覆盖配置文件） |
@@ -234,6 +239,9 @@ sync-skills
 # Force sync: source is the single source of truth
 sync-skills --force
 
+# Preview changes without executing
+sync-skills --dry-run
+
 # Delete a skill: remove from source and all targets
 sync-skills --delete skill-name
 
@@ -264,6 +272,7 @@ Source directory is the default base. Supports interactive base selection — ch
 | Flag | Description |
 |------|-------------|
 | `--force`, `-f` | Force sync (selectable base, content-aware, removes extras) |
+| `--dry-run` | Preview mode: show plan without executing |
 | `--delete NAME`, `-d NAME` | Delete a skill (from source and all targets) |
 | `-y`, `--yes` | Skip confirmation |
 | `--source DIR` | Source directory (default: `~/Skills`, overrides config) |
@@ -284,7 +293,7 @@ Source directory is the default base. Supports interactive base selection — ch
 ## Development
 
 ```bash
-uv run pytest tests/ -v    # 154 test cases
+uv run pytest tests/ -v    # 159 test cases
 ```
 
 ## License

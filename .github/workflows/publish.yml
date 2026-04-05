@@ -38,14 +38,14 @@ jobs:
           # 获取当前版本号
           CURRENT_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           # 检查当前版本是否包含今天的日期
-          if [[ "$CURRENT_VERSION" == *"0.3.$DATE"* ]]; then
+          if [[ "$CURRENT_VERSION" == *"0.5.$DATE"* ]]; then
             # 提取序号并递增
             SERIAL=$(echo $CURRENT_VERSION | awk -F. '{print $4}')
             NEW_SERIAL=$((SERIAL + 1))
-            NEW_VERSION="0.3.$DATE.$NEW_SERIAL"
+            NEW_VERSION="0.5.$DATE.$NEW_SERIAL"
           else
             # 新的一天，从序号 1 开始
-            NEW_VERSION="0.3.$DATE.1"
+            NEW_VERSION="0.5.$DATE.1"
           fi
           # 更新 pyproject.toml
           sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" pyproject.toml

@@ -1000,7 +1000,7 @@ def ask_base_selection(all_dirs: list[tuple[Path, str]]) -> Path | None:
 # 删除功能
 # ============================================================
 
-def execute_delete(skill_name: str, source_dir: Path, targets: list[Path], auto_confirm: bool):
+def execute_delete(skill_name: str, source_dir: Path, targets: list[Path], auto_confirm: bool, dry_run: bool = False):
     """删除指定 skill（从源目录和所有目标目录）"""
     source_rel = find_skill_in_source_by_name(source_dir, skill_name)
     target_dirs_with_skill = find_skill_in_targets(targets, skill_name)
@@ -1021,6 +1021,10 @@ def execute_delete(skill_name: str, source_dir: Path, targets: list[Path], auto_
         deleted_count += 1
 
     if not ask_confirmation(auto_confirm):
+        return
+
+    if dry_run:
+        log_info("dry-run mode: no changes made")
         return
 
     if source_rel:
@@ -1250,19 +1254,54 @@ def _cmd_info(args: argparse.Namespace):
 # ============================================================
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Skills 同步工具")
+    parser = argparse.ArgumentParser(
+        prog="sync-skills",
+        description=(
+            "sync-skills — Sync AI coding agent skills across multiple tools.\n"
+            "AI 编码工具 skills 统一管理与同步工具。\n"
+            "\n"
+            "Maintain a single categorized skills repository (~/Skills/) and\n"
+            "automatically distribute to Claude Code, Codex CLI, Gemini CLI, etc."
+        ),
+        epilog=(
+            "examples:\n"
+            "  sync-skills                          bidirectional sync (default)\n"
+            "  sync-skills --dry-run                preview changes without executing\n"
+            "  sync-skills --force -y               force sync, skip all prompts\n"
+            "  sync-skills init                     interactive config wizard\n"
+            "  sync-skills list                     list all skills grouped by category\n"
+            "  sync-skills list --tags code,review  filter by tags\n"
+            "  sync-skills search \"review\"          full-text search\n"
+            "  sync-skills info skill-name          show skill details\n"
+            "  sync-skills --delete skill-name -y   delete skill everywhere\n"
+            "  sync-skills --source ~/my-skills     use custom source directory\n"
+            "\n"
+            "config: ~/.config/sync-skills/config.toml\n"
+            "repo:   https://github.com/LuShan123888/sync-skills"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("command", nargs="?", default=None,
                         choices=["init", "list", "search", "info"],
-                        help="子命令：init, list, search, info")
+                        help="sub-command: init (setup config), list (show skills), search (find skills), info (skill details)")
     parser.add_argument("query", nargs="?", default=None,
-                        help="搜索关键词 (search) 或 skill 名称 (info)")
-    parser.add_argument("--config", type=Path, default=None, help="配置文件路径")
-    parser.add_argument("--force", "-f", action="store_true", help="强制同步模式（可选择任意目录为基准同步到其他目录）")
-    parser.add_argument("--delete", "-d", type=str, metavar="SKILL_NAME", help="删除指定的 skill（从源目录和所有目标目录）")
-    parser.add_argument("-y", "--yes", action="store_true", help="跳过确认")
-    parser.add_argument("--source", type=Path, default=None, help="源目录路径（覆盖配置文件）")
-    parser.add_argument("--targets", type=str, default=None, help="目标目录路径，逗号分隔（覆盖配置文件）")
-    parser.add_argument("--tags", type=str, default=None, help="按标签过滤（逗号分隔，用于 list 命令）")
+                        help="search query (for search command) or skill name (for info command)")
+    parser.add_argument("--config", type=Path, default=None,
+                        help="path to config file (default: ~/.config/sync-skills/config.toml)")
+    parser.add_argument("--force", "-f", action="store_true",
+                        help="force sync: use one directory as base, overwrite different content, remove extras")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="preview changes without executing (show plan only)")
+    parser.add_argument("--delete", "-d", type=str, metavar="SKILL_NAME",
+                        help="delete a skill from source and all target directories")
+    parser.add_argument("-y", "--yes", action="store_true",
+                        help="skip all confirmation prompts (use in scripts and automation)")
+    parser.add_argument("--source", type=Path, default=None,
+                        help="source directory path (overrides config file)")
+    parser.add_argument("--targets", type=str, default=None,
+                        help="target directories, comma-separated (overrides config file)")
+    parser.add_argument("--tags", type=str, default=None,
+                        help="filter by tags, comma-separated (for list command only)")
     args = parser.parse_args(argv)
 
     if args.targets:
@@ -1302,7 +1341,7 @@ def main(argv: list[str] | None = None):
 
     # 删除模式
     if args.delete:
-        execute_delete(args.delete, source_dir, targets, args.yes)
+        execute_delete(args.delete, source_dir, targets, args.yes, dry_run=args.dry_run)
         return
 
     # 选择性同步：检查未知工具引用
@@ -1366,6 +1405,10 @@ def main(argv: list[str] | None = None):
             log_success("无需同步")
             return
 
+        if args.dry_run:
+            log_info("dry-run mode: no changes made")
+            return
+
         # 4. 确认
         if not ask_confirmation(args.yes):
             return
@@ -1390,6 +1433,10 @@ def main(argv: list[str] | None = None):
 
         if not show_preview(plan, source_dir, targets, force=False, alias_map=bidir_alias_map):
             log_success("无需同步")
+            return
+
+        if args.dry_run:
+            log_info("dry-run mode: no changes made")
             return
 
         if not ask_confirmation(args.yes):
