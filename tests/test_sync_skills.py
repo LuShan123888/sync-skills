@@ -1487,3 +1487,47 @@ class TestDryRun:
         with pytest.raises(SystemExit):
             main(["--delete", "nonexistent", "--dry-run", "-y",
                   "--source", str(source), "--targets", f"{target_a},{target_b}"])
+
+    def test_dry_run_bidirectional_no_changes(self, env, capsys):
+        """已同步状态，dry-run 不应执行任何操作"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_b, "skill-a", "a")
+
+        main(["--dry-run", "-y", "--source", str(source),
+              "--targets", f"{target_a},{target_b}"])
+        captured = capsys.readouterr()
+
+        assert "无需同步" in captured.out or "无需同步" in captured.err
+
+    def test_dry_run_force_no_changes(self, env, capsys):
+        """force + dry-run 无变更时不应执行任何操作"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "a")
+        create_skill(target_a, "skill-a", "a")
+        create_skill(target_b, "skill-a", "a")
+
+        main(["--force", "--dry-run", "-y", "--source", str(source),
+              "--targets", f"{target_a},{target_b}"])
+        captured = capsys.readouterr()
+
+        assert "无需同步" in captured.out or "无需同步" in captured.err
+
+    def test_dry_run_bidirectional_with_conflict(self, env, capsys):
+        """双向同步 + dry-run + 冲突：源和两个目标各不相同（3 个哈希组）→ 冲突"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "source-ver")
+        create_skill(target_a, "skill-a", "target-a-ver")
+        create_skill(target_b, "skill-a", "target-b-ver")
+
+        main(["--dry-run", "-y", "--source", str(source),
+              "--targets", f"{target_a},{target_b}"])
+        captured = capsys.readouterr()
+
+        # 3 个哈希组 → 冲突，-y 模式下转为 warning
+        assert "内容不一致" in captured.out
+        # 不应修改任何文件
+        assert (source / "Code" / "skill-a" / "SKILL.md").read_text() == "source-ver"
+        assert (target_a / "skill-a" / "SKILL.md").read_text() == "target-a-ver"
+        assert (target_b / "skill-a" / "SKILL.md").read_text() == "target-b-ver"

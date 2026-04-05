@@ -40,6 +40,31 @@ sync-skills 的做法：
 
 ---
 
+## AI Agent 友好 / Agent-Friendly Design
+
+sync-skills 专为 AI 编码工具设计，支持两种 Agent 集成方式：
+
+### 内置 Skill
+
+项目附带一个 `skills/sync-skills/SKILL.md`，可作为 skill 安装到任意 AI 编码工具中。安装后，Agent 可以根据自然语言直接操作：
+
+```
+用户: "同步一下 skills"       → Agent 执行: sync-skills -y
+用户: "强制同步"              → Agent 执行: sync-skills --force -y
+用户: "看看有什么变化"        → Agent 执行: sync-skills --dry-run
+用户: "删掉 code-review"      → Agent 执行: sync-skills --delete code-review -y
+```
+
+### Agent 友好的 CLI
+
+- **`--help`** 输出结构化英文文本，包含完整示例，便于 Agent 解析
+- **`--dry-run`** 预览模式：Agent 可先检查影响再决定是否执行
+- **`-y`** 跳过交互确认：Agent 无法操作 stdin，`-y` 确保非阻塞执行
+- **`--dry-run` + `--delete`**：安全预览删除范围
+- **`list` / `search` / `info`**：结构化输出，便于 Agent 查询 skill 状态
+
+---
+
 ## 对比其他方案 / Comparison
 
 ### vs 手动复制
@@ -167,7 +192,7 @@ sync-skills info skill-name         # 查看 skill 详情
 
 ## 安全机制 / Safety
 
-- **预览确认** — 所有操作先展示变更清单，确认后才执行
+- **预览确认** — 所有操作先展示变更清单，确认后才执行；`--dry-run` 可仅预览不执行
 - **重名检测** — 不同分类下存在同名 skill 时，直接报错退出
 - **同步验证** — 执行后自动验证各目录的内容哈希是否一致
 - **内容感知** — 基于 MD5 哈希比较，内容相同的 skill 不会重复覆盖
@@ -179,7 +204,7 @@ sync-skills info skill-name         # 查看 skill 详情
 ## 开发 / Development
 
 ```bash
-uv run pytest tests/ -v    # 运行测试（154 个用例）
+uv run pytest tests/ -v    # 运行测试（162 个用例）
 ```
 
 ## License
@@ -199,6 +224,29 @@ AI coding agents (Claude Code, Codex CLI, Gemini CLI, OpenClaw, etc.) each maint
 - **Fragmented storage** — Create a skill in Claude Code, and it doesn't exist in Codex or Gemini. You end up manually copying between directories.
 - **No organization** — Tools only support flat directories. With dozens of skills, there's no way to categorize.
 - **Sync headache** — Edit a skill in one tool, and every other tool has the stale version.
+
+## Agent-Friendly Design
+
+sync-skills is designed for AI coding agents with two integration approaches:
+
+### Built-in Skill
+
+The project ships with `skills/sync-skills/SKILL.md` that can be installed as a skill in any AI coding tool. Once installed, agents can operate sync-skills via natural language:
+
+```
+User: "sync skills"              → Agent runs: sync-skills -y
+User: "force sync"               → Agent runs: sync-skills --force -y
+User: "check what would change"  → Agent runs: sync-skills --dry-run
+User: "delete code-review"       → Agent runs: sync-skills --delete code-review -y
+```
+
+### Agent-Friendly CLI
+
+- **`--help`** outputs structured English text with full examples, easy for agents to parse
+- **`--dry-run`** preview mode: agents can inspect impact before executing
+- **`-y`** skips interactive confirmation: agents can't interact with stdin, `-y` ensures non-blocking execution
+- **`--dry-run` + `--delete`**: safely preview deletion scope
+- **`list` / `search` / `info`**: structured output for agents to query skill status
 
 ### vs Symlinks
 
@@ -283,7 +331,7 @@ Source directory is the default base. Supports interactive base selection — ch
 
 ## Safety
 
-- Preview before execute — shows full diff before any changes
+- Preview before execute — shows full diff before any changes; `--dry-run` for preview-only mode
 - Duplicate name detection — errors if same skill name exists in multiple categories
 - Post-sync verification — confirms content hashes match across all directories
 - Content-aware — MD5 hashing, identical skills are skipped
@@ -293,7 +341,7 @@ Source directory is the default base. Supports interactive base selection — ch
 ## Development
 
 ```bash
-uv run pytest tests/ -v    # 159 test cases
+uv run pytest tests/ -v    # 162 test cases
 ```
 
 ## License

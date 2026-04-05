@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv run python -m pytest tests/ -v          # run all tests (159 cases)
+uv run python -m pytest tests/ -v          # run all tests (162 cases)
 uv run python -m pytest tests/ -v -k test_collect_new_skill  # run single test
 uv sync                          # install dependencies
 sync-skills                      # run (after pip install -e .)
@@ -34,6 +34,10 @@ src/sync_skills/
 ├── config.py        # Config/Target dataclasses, load/save TOML, detect_installed_tools
 ├── metadata.py      # SKILL.md frontmatter parsing (PyYAML), SkillMetadata, search/filter
 └── cli.py           # all sync logic, CLI parsing, init wizard, conflict resolution, list/search/info
+
+skills/
+└── sync-skills/
+    └── SKILL.md     # AI skill: teaches AI models how to use this CLI tool
 ```
 
 ### Core flow: Scan → Plan → Conflict Resolution → Preview → Confirm → Execute → Verify
@@ -104,7 +108,7 @@ Additional test files:
 - `tests/test_init.py` — Init wizard tests (config creation, default/custom source): 3 tests
 - `tests/test_metadata.py` — Metadata module tests (frontmatter parsing, filtering, search): 36 tests
 
-Total: 159 tests.
+Total: 162 tests.
 
 ### Delete command
 
@@ -164,5 +168,5 @@ See `docs/DESIGN.md` for:
 ## Current status
 
 - **版本**: v0.5.0（Skill 化封装 + AI 友好 CLI）
-- **Phase 4 已完成**: `--dry-run`、改进 help 输出（英文、epilog 示例）、`skills/sync-skills/SKILL.md`、159 个测试
+- **Phase 4 已完成**: `--dry-run`、改进 help 输出（英文、epilog 示例）、`skills/sync-skills/SKILL.md`、162 个测试
 - **下一步**: Phase 5 — 多端与协作（v1.0 远期）
