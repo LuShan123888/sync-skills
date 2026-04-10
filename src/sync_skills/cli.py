@@ -341,16 +341,30 @@ def preview_bidirectional(source_dir: Path, targets: list[Path],
             # 按 group 大小排序，找到 singleton（只有 1 个位置的组）
             group_sizes = sorted(hash_groups.values(), key=len)
             singleton_group = group_sizes[0]
+            majority_group = group_sizes[1]
             if len(singleton_group) == 1:
-                # 一个位置与其他不一致 → 自动解决：以 singleton 版本为准
+                # 一个位置与其他不一致 → 比较 mtime 决定方向
                 singleton_sv = singleton_group[0]
-                if singleton_sv.is_source:
-                    # 源版本是最新 → 标记为需要分发更新
-                    auto_distribute.add(skill_name)
+                singleton_mtime = max(v.mtime for v in singleton_group)
+                majority_mtime = max(v.mtime for v in majority_group)
+                # mtime 差异 < 1s 视为同时修改，回退到以 singleton 为准（旧行为）
+                if abs(singleton_mtime - majority_mtime) < 1.0 or singleton_mtime >= majority_mtime:
+                    # singleton 更新或同时 → 以 singleton 版本为准
+                    if singleton_sv.is_source:
+                        auto_distribute.add(skill_name)
+                    else:
+                        source_rel = source_versions[0].source_rel
+                        plan.collect_update.append((skill_name, source_rel, singleton_sv.path.parent))
                 else:
-                    # 单个目标不同于其他（含源）→ 收集更新到源
-                    source_rel = source_versions[0].source_rel
-                    plan.collect_update.append((skill_name, source_rel, singleton_sv.path.parent))
+                    # majority 明显更新 → 以 majority 版本为准
+                    if not any(v.is_source for v in singleton_group):
+                        # singleton 是目标且是旧版，majority（含源）是新版 → 分发
+                        auto_distribute.add(skill_name)
+                    else:
+                        # singleton 是源且是旧版，majority（目标）是新版 → 收集
+                        majority_sv = majority_group[0]
+                        source_rel = source_versions[0].source_rel
+                        plan.collect_update.append((skill_name, source_rel, majority_sv.path.parent))
                 continue
 
         # 无法自动解决 → 冲突
