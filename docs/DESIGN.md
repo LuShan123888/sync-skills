@@ -516,6 +516,36 @@ v0.2 已迁移到 `src/sync_skills/` 包结构。迁移原因：
 
 按时间倒序记录每次讨论的关键决策、代码变更和待办事项。
 
+### 2026-04-11 v0.5.1：预览显示优化 + 变更源头追踪
+
+**讨论内容**：
+双向同步预览存在多处误导：1）目标目录变更显示为"从源目录分发"，实际源头是目标；2）冲突界面重复显示哈希和 name/description；3）标题栏显示内部模式名称；4）所有路径显示为文件系统路径而非可读工具名。
+
+**关键决策**：
+- `SyncPlan` 新增 `update_origins: dict[str, Path]` 字段，追踪每个 skill 的实际变更源头目录
+- `_build_alias_map()` 接受 `name_map` 参数，优先使用 KNOWN_TOOLS 中的可读名称（如 "Claude Code"）而非文件系统路径
+- 冲突界面：去掉哈希显示，name/description 只在顶部显示一次，每个版本仅显示位置和修改时间
+- 标题栏从 "双向同步 · Skills 同步" 改为 "sync-skills v{version}"
+- `execute_bidirectional()` 对有 `update_origins` 的操作直接从源头目标复制，跳过源目录中转
+
+**代码变更**：
+- `cli.py` `SyncPlan`：新增 `update_origins` 字段
+- `cli.py` `preview_bidirectional()`：`collect_new` 和 `collect_update` 时填充 `update_origins`
+- `cli.py` `_apply_resolutions()`：用户选择目标版本时填充 `update_origins`
+- `cli.py` `show_preview()`：creates/updates 查找 `update_origins` 显示实际源头
+- `cli.py` `execute_bidirectional()`：有 origin 时直接从源头复制
+- `cli.py` `ask_conflict_resolution()`：接收 `alias_map`，位置显示使用可读名称；去掉哈希，公共信息只显示一次
+- `cli.py` `_build_version_warning_from_versions()`：接收 `alias_map`，位置显示使用可读名称
+- `cli.py` `_resolve_conflicts()`：传递 `alias_map`
+- `cli.py` `_build_alias_map()`：新增 `name_map` 参数，支持可读名称映射
+- `cli.py` `main()`：构建 `target_name_map`（KNOWN_TOOLS 优先），传入 `_build_alias_map` 和 `_resolve_conflicts`
+- `cli.py` 标题栏：显示 `sync-skills v{__version__}`
+
+**测试变更**：
+- `tests/test_sync_skills.py` 新增 2 个测试：`test_preview_shows_actual_origin_for_target_update`、`test_preview_shows_actual_origin_for_new_skill`
+- `test_collect_update_distributes_to_other_targets` 新增 `update_origins` 断言
+- 测试数量从 162 个增加到 164 个
+
 ### 2026-04-05 Phase 4 完成：Skill 化封装 + AI 友好 CLI
 
 **讨论内容**：

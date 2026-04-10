@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from sync_skills.cli import (
+    ConflictResolution,
     SyncPlan,
     ask_base_selection,
     ask_conflict_resolution,
@@ -22,8 +23,8 @@ from sync_skills.cli import (
     preview_bidirectional,
     preview_force,
     show_overview,
+    show_preview,
     skill_dir_hash,
-    _apply_resolutions,
     _build_skill_version,
     _resolve_conflicts,
 )
@@ -183,7 +184,8 @@ class TestBidirectional:
         plan = preview_bidirectional(source, [target_a, target_b])
         assert not plan.has_changes
 
-    def test_collect_new_skill(self, env):
+    def test_new_skill_in_target_distributes(self, env):
+        """目标目录新增 skill → 分发到源和其他目标"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
         create_skill(target_a, "skill-a", "a")
@@ -191,13 +193,17 @@ class TestBidirectional:
         create_skill(target_b, "skill-a", "a")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        assert len(plan.collect_new) == 1
-        assert plan.collect_new[0][0] == "new-skill"
-        # new-skill 需要分发到 target_b
-        create_names = {n for n, _ in plan.creates}
-        assert "new-skill" in create_names
+        ops = [op for op in plan.sync_ops if op.skill_name == "new-skill"]
+        assert len(ops) == 2
+        # target_a 是 origin
+        assert all(op.origin_dir == target_a for op in ops)
+        # 分发到 source 和 target_b
+        dests = {op.dest_dir for op in ops}
+        assert source in dests
+        assert target_b in dests
 
-    def test_collect_updated_skill(self, env):
+    def test_target_update_distributes(self, env):
+        """单个目标更新 skill → 从最新位置分发到源和其他目标"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "old")
         create_skill(target_a, "skill-a", "old")
@@ -208,10 +214,15 @@ class TestBidirectional:
         (target_a / "skill-a" / "SKILL.md").write_text("updated")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        assert len(plan.collect_update) == 1
-        assert plan.collect_update[0][0] == "skill-a"
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        assert len(ops) == 2
+        assert all(op.origin_dir == target_a for op in ops)
+        dests = {op.dest_dir for op in ops}
+        assert source in dests
+        assert target_b in dests
 
-    def test_distribute_new_skill(self, env):
+    def test_source_new_skill_distributes(self, env):
+        """源目录新增 skill → 分发到所有目标"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
         create_skill_in_category(source, "Code", "skill-b", "b")
@@ -219,12 +230,14 @@ class TestBidirectional:
         create_skill(target_b, "skill-a", "a")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        create_entries = [(n, d) for n, d in plan.creates]
-        assert ("skill-b", target_a) in create_entries
-        assert ("skill-b", target_b) in create_entries
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-b"]
+        assert len(ops) == 2
+        dests = {op.dest_dir for op in ops}
+        assert target_a in dests
+        assert target_b in dests
 
-    def test_delete_extra_not_in_source(self, env):
-        """双向模式下，目标多余 skill 会被收集到 Other/ 而非删除"""
+    def test_orphan_skill_distributes(self, env):
+        """目标多余 skill（源中不存在）→ 分发到源(Other/)和其他目标"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
         create_skill(target_a, "skill-a", "a")
@@ -232,11 +245,12 @@ class TestBidirectional:
         create_skill(target_b, "skill-a", "a")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        # orphan 应被收集而非删除
-        assert len(plan.collect_new) == 1
-        assert plan.collect_new[0][0] == "orphan"
+        ops = [op for op in plan.sync_ops if op.skill_name == "orphan"]
+        assert len(ops) == 2
+        assert any(op.dest_dir == source for op in ops)
+        assert any(op.dest_dir == target_b for op in ops)
 
-    def test_execute_collect_and_distribute(self, env):
+    def test_execute_distribute(self, env):
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
         create_skill(target_a, "skill-a", "a")
@@ -246,7 +260,7 @@ class TestBidirectional:
         plan = preview_bidirectional(source, [target_a, target_b])
         execute_bidirectional(plan, source, [target_a, target_b])
 
-        # new-skill 被收集到 Other/
+        # new-skill 被分发到 Other/
         assert (source / "Other" / "new-skill" / "SKILL.md").read_text() == "new-content"
         # new-skill 被分发到 target_b
         assert (target_b / "new-skill" / "SKILL.md").is_file()
@@ -262,23 +276,24 @@ class TestBidirectional:
         assert "无需同步" in captured.err
         assert "同步到" not in captured.err
 
-    def test_collect_update_distributes_to_other_targets(self, env):
-        """单个目标修改 skill 后，收集到源并分发到其他目标"""
+    def test_target_update_distributes_to_others(self, env):
+        """单个目标修改 skill 后，从该目标分发到源和其他目标"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "old")
         create_skill(target_a, "skill-a", "new-version")
         create_skill(target_b, "skill-a", "old")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        # 应收集更新
-        assert len(plan.collect_update) == 1
-        assert plan.collect_update[0][0] == "skill-a"
-        assert plan.collect_update[0][2] == target_a
-        # 应生成 update 到 target_b（它有旧版本）
-        update_targets = [d for _, _, d in plan.updates]
-        assert target_b in update_targets
-        # 不应更新 target_a（它是来源）
-        assert target_a not in update_targets
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        assert len(ops) == 2
+        # target_a 是最新版本所在位置
+        assert all(op.origin_dir == target_a for op in ops)
+        # 分发到 source 和 target_b
+        dests = {op.dest_dir for op in ops}
+        assert source in dests
+        assert target_b in dests
+        # 不应分发到 target_a（它已是最新）
+        assert target_a not in dests
 
         # 执行
         execute_bidirectional(plan, source, [target_a, target_b])
@@ -375,11 +390,11 @@ class TestForce:
         create_skill(target_b, "skill-a", "source-version")
 
         plan = preview_force(source, [target_a, target_b])
-        assert len(plan.updates) == 1
-        assert plan.updates[0][0] == "skill-a"
-        assert plan.updates[0][2] == target_a
-        # target_b 内容一致，不产生 update
-        assert not any(d == target_b for _, _, d in plan.updates)
+        ops_to_a = [op for op in plan.sync_ops if op.dest_dir == target_a]
+        assert len(ops_to_a) == 1
+        assert ops_to_a[0].skill_name == "skill-a"
+        # target_b 内容一致，不产生操作
+        assert not any(op.dest_dir == target_b for op in plan.sync_ops)
 
         execute_force(plan, source, [target_a, target_b])
         assert (target_a / "skill-a" / "SKILL.md").read_text() == "source-version"
@@ -392,8 +407,8 @@ class TestForce:
         (target_a / "skill-a" / "extra.txt").write_text("extra")
 
         plan = preview_force(source, [target_a])
-        assert len(plan.updates) == 1
-
+        ops_to_a = [op for op in plan.sync_ops if op.dest_dir == target_a]
+        assert len(ops_to_a) == 1
         execute_force(plan, source, [target_a])
         assert (target_a / "skill-a" / "SKILL.md").read_text() == "src"
         # 额外文件被清除（整个目录被替换）
@@ -429,6 +444,35 @@ class TestErrors:
 
 
 class TestPreview:
+    def test_preview_shows_actual_origin_for_target_update(self, env, capsys):
+        """目标目录修改 skill 后，预览中其他目标应显示实际源头而非源目录"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "old")
+        create_skill(target_a, "skill-a", "new-version")
+        create_skill(target_b, "skill-a", "old")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        show_preview(plan, source, [target_a, target_b], force=False)
+        output = capsys.readouterr()
+        combined = output.out + output.err
+        # target_b 的更新应显示来自 target_a（实际源头），而非源目录
+        assert str(target_a) in combined
+        # 源目录部分显示 ← target_a
+        assert "←" in combined
+
+    def test_preview_shows_actual_origin_for_new_skill(self, env, capsys):
+        """目标目录新增 skill 后，预览中其他目标应显示实际源头"""
+        source, target_a, target_b = env
+        create_skill(target_a, "new-skill", "new")
+        create_skill(target_b, "new-skill", "new")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        show_preview(plan, source, [target_a, target_b], force=False)
+        output = capsys.readouterr()
+        combined = output.out + output.err
+        # 新 skill 的源头应显示来自 target_a
+        assert "new-skill" in combined
+
     def test_preview_shows_per_directory(self, env, capsys):
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
@@ -476,7 +520,7 @@ class TestPreview:
 
 class TestMultiTarget:
     def test_collect_from_multiple_targets(self, env):
-        """S2: 多个目标各有不同的新 skill，都应收集到 Other/ 并交叉分发"""
+        """S2: 多个目标各有不同的新 skill，都应分发到 Other/ 和其他目标"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
         create_skill(target_a, "skill-a", "a")
@@ -487,7 +531,7 @@ class TestMultiTarget:
         plan = preview_bidirectional(source, [target_a, target_b])
         execute_bidirectional(plan, source, [target_a, target_b])
 
-        # 两个新 skill 都收集到 Other/
+        # 两个新 skill 都分发到 Other/
         assert (source / "Other" / "new-from-a" / "SKILL.md").read_text() == "from-a"
         assert (source / "Other" / "new-from-b" / "SKILL.md").read_text() == "from-b"
         # 交叉分发
@@ -509,7 +553,7 @@ class TestMultiTarget:
         assert (target_b / "skill-b" / "SKILL.md").is_file()
 
     def test_collect_from_target_b_only(self, env):
-        """target_b 有新 skill，target_a 没有 → 只从 target_b 收集"""
+        """target_b 有新 skill，target_a 没有 → 从 target_b 分发到源和 target_a"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
         create_skill(target_a, "skill-a", "a")
@@ -522,8 +566,8 @@ class TestMultiTarget:
         assert (source / "Other" / "only-in-b" / "SKILL.md").read_text() == "b-content"
         assert (target_a / "only-in-b" / "SKILL.md").is_file()
 
-    def test_collect_from_multiple_targets(self, env):
-        """多个目标各有不同的新 skill，都应收集到 Other/ 并交叉分发"""
+    def test_collect_from_multiple_targets_duplicate(self, env):
+        """多个目标各有不同的新 skill，都应分发到 Other/ 并交叉分发（与第一个 test 等价但不同场景）"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
         create_skill(target_a, "skill-a", "a")
@@ -534,7 +578,7 @@ class TestMultiTarget:
         plan = preview_bidirectional(source, [target_a, target_b])
         execute_bidirectional(plan, source, [target_a, target_b])
 
-        # 两个新 skill 都收集到 Other/
+        # 两个新 skill 都分发到 Other/
         assert (source / "Other" / "new-from-a" / "SKILL.md").read_text() == "from-a"
         assert (source / "Other" / "new-from-b" / "SKILL.md").read_text() == "from-b"
         # 交叉分发
@@ -673,7 +717,7 @@ class TestUserScenarios:
         assert not (target_a / "Lark").exists()
 
     def test_s2_target_add_skill(self, env):
-        """S2: 在某个目标新增 skill → 收集到 Other/ → 分发到其他目标"""
+        """S2: 在某个目标新增 skill → 分发到 Other/ 和其他目标"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "a")
         create_skill(target_a, "skill-a", "a")
@@ -682,7 +726,7 @@ class TestUserScenarios:
 
         run_main(source, [target_a, target_b])
 
-        # 收集到源 Other/
+        # 分发到源 Other/
         assert (source / "Other" / "created-in-codex" / "SKILL.md").read_text() == "codex-new"
         # 分发到 target_b
         assert (target_b / "created-in-codex" / "SKILL.md").read_text() == "codex-new"
@@ -727,12 +771,13 @@ class TestUserScenarios:
         plan = preview_bidirectional(source, [target_a, target_b])
         # 不应有冲突
         assert not plan.has_conflicts
-        # 不应有 collect_update（源版本是最新，不需要收集）
-        assert len(plan.collect_update) == 0
-        # 源版本应自动分发到目标（阶段2 的 creates/updates 处理）
-        # 由于内容不同，应该是 updates
-        update_targets = [d for _, _, d in plan.updates]
-        assert len(update_targets) == 2
+        # 源版本应自动分发到目标
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        assert len(ops) == 2
+        assert all(op.origin_dir == source for op in ops)
+        dests = {op.dest_dir for op in ops}
+        assert target_a in dests
+        assert target_b in dests
 
     def test_s6_multi_target_conflict(self, env):
         """S6: 多个目标同时修改同一 skill → 冲突"""
@@ -746,8 +791,6 @@ class TestUserScenarios:
         (target_b / "skill-a" / "SKILL.md").write_text("updated-by-b")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        # 冲突时不应自动收集更新
-        assert len(plan.collect_update) == 0
         # 应有冲突
         assert plan.has_conflicts
         conflict_names = [name for name, _ in plan.conflicts]
@@ -766,8 +809,6 @@ class TestUserScenarios:
         (target_a / "skill-a" / "SKILL.md").write_text("updated-in-target")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        # 不应自动收集（两边都改了是冲突）
-        assert len(plan.collect_update) == 0
         # 应有冲突
         assert plan.has_conflicts
         conflict_names = [name for name, _ in plan.conflicts]
@@ -808,7 +849,7 @@ class TestUserScenarios:
 
         run_main(source, [target_a, target_b])
 
-        # 双向模式下，to-delete 被从目标收集回 Other/
+        # 双向模式下，to-delete 被从目标分发回 Other/
         assert (source / "Other" / "to-delete" / "SKILL.md").is_file()
 
     def test_s8_delete_from_source_force_removes_all(self, env):
@@ -857,7 +898,7 @@ class TestUserScenarios:
 class TestBaseSelection:
     """测试 force 模式下选择基准目录的功能"""
 
-    def test_force_with_target_as_base(self, env, capsys):
+    def test_force_with_target_as_base(self, env):
         """以目标目录为基准同步到源和其他目标"""
         source, target_a, target_b = env
         # 源有旧版本
@@ -959,18 +1000,18 @@ class TestBaseSelection:
 class TestConflictResolution:
     """测试纯哈希冲突检测和交互式冲突解决"""
 
-    def test_safe_collect_single_target_differs(self, env):
-        """单个目标不同于源 → 自动 collect_update"""
+    def test_safe_resolve_single_target_differs(self, env):
+        """单个目标不同于源 → 自动解决（singleton 是最新）"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "same")
         create_skill(target_a, "skill-a", "modified")
         create_skill(target_b, "skill-a", "same")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        assert len(plan.collect_update) == 1
-        assert plan.collect_update[0][0] == "skill-a"
-        assert plan.collect_update[0][2] == target_a
         assert not plan.has_conflicts
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        assert len(ops) == 2
+        assert all(op.origin_dir == target_a for op in ops)
 
     def test_conflict_source_differs_from_all_targets(self, env):
         """源不同于所有目标（源是 singleton）→ 自动解决：以源版本分发"""
@@ -981,10 +1022,9 @@ class TestConflictResolution:
 
         plan = preview_bidirectional(source, [target_a, target_b])
         assert not plan.has_conflicts
-        assert not plan.collect_update
-        # 源版本应自动分发到目标（阶段2 的 updates）
-        update_targets = [d for _, _, d in plan.updates]
-        assert len(update_targets) == 2
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        assert len(ops) == 2
+        assert all(op.origin_dir == source for op in ops)
 
     def test_conflict_two_targets_disagree(self, env):
         """两个目标不一致 → 冲突"""
@@ -1009,15 +1049,16 @@ class TestConflictResolution:
         assert plan.has_conflicts
 
     def test_new_skill_in_multiple_targets_same_content(self, env):
-        """多个目标新增同一 skill 且内容一致 → 安全收集"""
+        """多个目标新增同一 skill 且内容一致 → 自动分发到源"""
         source, target_a, target_b = env
         create_skill(target_a, "skill-new", "same-content")
         create_skill(target_b, "skill-new", "same-content")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        assert len(plan.collect_new) == 1
-        assert plan.collect_new[0][0] == "skill-new"
         assert not plan.has_conflicts
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-new"]
+        assert len(ops) >= 1
+        assert any(op.dest_dir == source for op in ops)
 
     def test_new_skill_in_multiple_targets_different_content(self, env):
         """多个目标新增同一 skill 但内容不同 → 冲突"""
@@ -1070,6 +1111,37 @@ class TestConflictResolution:
         result = ask_conflict_resolution("skill-a", versions, auto_confirm=True)
         assert result is None
 
+    def test_auto_resolve_stale_target_singleton(self, env):
+        """源+一个目标内容一致且更新，另一个目标是旧版 singleton → 应分发而非收集"""
+        source, target_a, target_b = env
+        create_skill(target_b, "skill-a", "old-ver")
+        time.sleep(1.5)
+        create_skill_in_category(source, "Code", "skill-a", "new-ver")
+        create_skill(target_a, "skill-a", "new-ver")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert not plan.has_conflicts
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        # 只需要更新 target_b（旧版 singleton）
+        assert len(ops) == 1
+        assert ops[0].dest_dir == target_b
+
+    def test_auto_resolve_stale_source_singleton(self, env):
+        """源是旧版 singleton，目标们内容一致且更新 → 应从目标分发到源"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "old-ver")
+        time.sleep(1.5)
+        create_skill(target_a, "skill-a", "new-ver")
+        create_skill(target_b, "skill-a", "new-ver")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert not plan.has_conflicts
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        # 只需要更新 source（旧版 singleton）
+        assert len(ops) == 1
+        assert ops[0].dest_dir == source
+        assert ops[0].origin_dir in (target_a, target_b)
+
     def test_auto_resolve_source_singleton(self, env):
         """源不同于所有目标（源是 singleton）→ 自动解决"""
         source, target_a, target_b = env
@@ -1080,62 +1152,38 @@ class TestConflictResolution:
         plan = preview_bidirectional(source, [target_a, target_b])
         # 源是 singleton → 自动解决，不应有冲突
         assert not plan.has_conflicts
-        # 源版本应自动分发到目标（阶段2 的 updates）
-        update_targets = [d for _, _, d in plan.updates]
-        assert len(update_targets) == 2
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        assert len(ops) == 2
+        assert all(op.origin_dir == source for op in ops)
 
-    def test_apply_resolutions_from_source(self, env):
-        """选源版本 → 分发到所有目标"""
+    def test_resolve_conflict_from_source(self, env, monkeypatch):
+        """源不同于所有目标（2 hash groups, majority >= 2）→ 自动解决：以源版本分发"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "source-ver")
         create_skill(target_a, "skill-a", "target-ver")
         create_skill(target_b, "skill-a", "target-ver")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        # 手动添加一个 resolution（选源版本）
-        from sync_skills.cli import ConflictResolution
-        plan.resolutions.append(ConflictResolution(
-            skill_name="skill-a",
-            chosen_path=source / "Code" / "skill-a",
-            chosen_alias="source",
-            chosen_source_rel="Code/skill-a",
-        ))
-        plan.conflicts.clear()
+        # 新模型中 source singleton + majority >= 2 自动解决，不再是冲突
+        assert not plan.has_conflicts
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        assert len(ops) == 2
+        assert all(op.origin_dir == source for op in ops)
 
-        _apply_resolutions(plan, source, [target_a, target_b])
-
-        # 应生成 updates（覆盖目标）
-        update_names = [n for n, _, d in plan.updates]
-        assert "skill-a" in update_names
-
-    def test_apply_resolutions_from_target(self, env):
-        """选目标版本 → 收集到源 + 分发到其他目标"""
+    def test_resolve_conflict_from_target(self, env, monkeypatch):
+        """目标 singleton + majority >= 2 → 自动解决：以目标版本分发"""
         source, target_a, target_b = env
         create_skill_in_category(source, "Code", "skill-a", "source-ver")
         create_skill(target_a, "skill-a", "target-ver")
         create_skill(target_b, "skill-a", "source-ver")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        # 手动添加 resolution（选 target_a 版本）
-        from sync_skills.cli import ConflictResolution
-        plan.resolutions.append(ConflictResolution(
-            skill_name="skill-a",
-            chosen_path=target_a / "skill-a",
-            chosen_alias="target_a",
-            chosen_source_rel=None,
-        ))
-        plan.conflicts.clear()
-
-        _apply_resolutions(plan, source, [target_a, target_b])
-
-        # 应生成 collect_update（收集到源）
-        collect_names = [n for n, _, _ in plan.collect_update]
-        assert "skill-a" in collect_names
-        # 应生成 updates（分发到 target_b）
-        update_targets = [d for _, _, d in plan.updates]
-        assert target_b in update_targets
-        # target_a 不应出现在 updates（它是来源）
-        assert target_a not in update_targets
+        # 新模型中 target singleton + majority >= 2 自动解决
+        assert not plan.has_conflicts
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+        assert len(ops) >= 1
+        # target_a 版本应分发到 source 和 target_b
+        assert any(op.origin_dir == target_a for op in ops)
 
     def test_resolve_and_execute_end_to_end(self, env, monkeypatch, capsys):
         """端到端：解决冲突 → 执行 → 验证"""
@@ -1151,8 +1199,7 @@ class TestConflictResolution:
 
         # 模拟用户选源版本（版本 0，mtime 最新为建议版本）
         monkeypatch.setattr("builtins.input", lambda _: "0")
-        _resolve_conflicts(plan, auto_confirm=False)
-        _apply_resolutions(plan, source, [target_a, target_b])
+        _resolve_conflicts(plan, source, [target_a, target_b], auto_confirm=False)
 
         assert not plan.has_conflicts
         assert len(plan.resolutions) == 1
@@ -1186,29 +1233,29 @@ class TestSelectiveSync:
         codex.mkdir(parents=True)
         return claude, codex
 
-    def test_tools_field_filters_creates_bidirectional(self, env):
+    def test_tools_field_filters_sync_bidirectional(self, env):
         """tools: [claude] 的 skill 只同步到 .claude 目标"""
         source = env[0]
         claude, codex = self._make_targets(env[0].parent)
         create_skill_in_category(source, "Code", "skill-a", "---\ntools: [claude]\n---\n# skill-a\n")
 
         plan = preview_bidirectional(source, [claude, codex])
-        creates_claude = [n for n, d in plan.creates if d == claude]
-        creates_codex = [n for n, d in plan.creates if d == codex]
-        assert "skill-a" in creates_claude
-        assert "skill-a" not in creates_codex
+        ops_claude = [op.skill_name for op in plan.sync_ops if op.dest_dir == claude]
+        ops_codex = [op.skill_name for op in plan.sync_ops if op.dest_dir == codex]
+        assert "skill-a" in ops_claude
+        assert "skill-a" not in ops_codex
 
-    def test_tools_field_filters_creates_force(self, env):
+    def test_tools_field_filters_sync_force(self, env):
         """tools: [claude] 的 skill 在 force 模式下只同步到 .claude 目标"""
         source = env[0]
         claude, codex = self._make_targets(env[0].parent)
         create_skill_in_category(source, "Code", "skill-a", "---\ntools: [claude]\n---\n# skill-a\n")
 
         plan = preview_force(source, [claude, codex])
-        creates_claude = [n for n, d in plan.creates if d == claude]
-        creates_codex = [n for n, d in plan.creates if d == codex]
-        assert "skill-a" in creates_claude
-        assert "skill-a" not in creates_codex
+        ops_claude = [op.skill_name for op in plan.sync_ops if op.dest_dir == claude]
+        ops_codex = [op.skill_name for op in plan.sync_ops if op.dest_dir == codex]
+        assert "skill-a" in ops_claude
+        assert "skill-a" not in ops_codex
 
     def test_exclude_tags_skips_skill(self, env):
         """exclude_tags 中的标签阻止 skill 同步"""
@@ -1216,7 +1263,7 @@ class TestSelectiveSync:
         create_skill_in_category(source, "Code", "skill-a", "---\ntags: [wip]\n---\n# skill-a\n")
 
         plan = preview_bidirectional(source, [target_a, target_b], exclude_tags=["wip"])
-        assert len(plan.creates) == 0
+        assert len(plan.sync_ops) == 0
 
     def test_no_metadata_syncs_to_all(self, env):
         """无 frontmatter 的 skill 同步到所有目标"""
@@ -1224,10 +1271,10 @@ class TestSelectiveSync:
         create_skill_in_category(source, "Code", "skill-a", "# skill-a\n")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        creates_a = [n for n, d in plan.creates if d == target_a]
-        creates_b = [n for n, d in plan.creates if d == target_b]
-        assert "skill-a" in creates_a
-        assert "skill-a" in creates_b
+        ops_a = [op.skill_name for op in plan.sync_ops if op.dest_dir == target_a]
+        ops_b = [op.skill_name for op in plan.sync_ops if op.dest_dir == target_b]
+        assert "skill-a" in ops_a
+        assert "skill-a" in ops_b
 
     def test_empty_tools_syncs_to_all(self, env):
         """tools: [] 的 skill 同步到所有目标"""
@@ -1235,10 +1282,10 @@ class TestSelectiveSync:
         create_skill_in_category(source, "Code", "skill-a", "---\ntools: []\n---\n# skill-a\n")
 
         plan = preview_bidirectional(source, [target_a, target_b])
-        creates_a = [n for n, d in plan.creates if d == target_a]
-        creates_b = [n for n, d in plan.creates if d == target_b]
-        assert "skill-a" in creates_a
-        assert "skill-a" in creates_b
+        ops_a = [op.skill_name for op in plan.sync_ops if op.dest_dir == target_a]
+        ops_b = [op.skill_name for op in plan.sync_ops if op.dest_dir == target_b]
+        assert "skill-a" in ops_a
+        assert "skill-a" in ops_b
 
     def test_selective_sync_deletes_from_excluded_target(self, env):
         """双向同步：已在不应同步的目标中存在的 skill 应被删除"""
@@ -1287,20 +1334,19 @@ class TestSelectiveSync:
         assert (claude / "skill-a" / "SKILL.md").is_file()
         assert not (codex / "skill-a").exists()
 
-    def test_collected_skill_respects_tools(self, env):
-        """收集的 skill 根据 tools 字段选择性分发"""
+    def test_target_skill_respects_tools(self, env):
+        """目标中的新 skill 根据 tools 字段选择性分发"""
         source = env[0]
         claude, codex = self._make_targets(env[0].parent)
         # codex 中有一个 skill 指定了只同步到 claude
         create_skill(codex, "skill-x", "---\ntools: [claude]\n---\n# skill-x\n")
 
         plan = preview_bidirectional(source, [claude, codex])
-        # skill-x 应被收集到源
-        collect_names = [n for n, _ in plan.collect_new]
-        assert "skill-x" in collect_names
-        # 分发时只到 claude（codex 已有，不需要创建）
-        creates_claude = [n for n, d in plan.creates if d == claude]
-        assert "skill-x" in creates_claude
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-x"]
+        # skill-x 应分发到源和 claude，但不分发到 codex（codex 已有）
+        assert any(op.dest_dir == source for op in ops)
+        assert any(op.dest_dir == claude for op in ops)
+        assert not any(op.dest_dir == codex for op in ops)
 
 
 # ============================================================
@@ -1444,7 +1490,7 @@ class TestDryRun:
         assert "dry-run" in captured.err
         # 新 skill 不应被复制到 target_b
         assert not (target_b / "new-skill").exists()
-        # 新 skill 不应被收集到源目录
+        # 新 skill 不应被分发到源目录
         assert not (source / "Other" / "new-skill").exists()
 
     def test_dry_run_force_mode(self, env, capsys):

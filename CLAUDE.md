@@ -87,17 +87,23 @@ tools: [claude, codex]  # only sync to these targets (empty = all)
 
 ### Conflict resolution (v0.3.0)
 
-- **Interactive mode** (default): `ask_conflict_resolution()` presents all versions with hash prefix, mtime hint, and SKILL.md preview. User selects version or skips.
+- **Interactive mode** (default): `ask_conflict_resolution()` presents all versions with mtime hint and common SKILL.md preview (name/description shown once). User selects version or skips.
 - **Auto mode** (`-y`): conflicts are converted to warnings (same as v0.2 behavior), sync proceeds without resolving conflicts.
 - **Resolution application**: `_apply_resolutions()` converts user choices to `collect_update`/`creates`/`updates` operations. Respects selective sync filtering.
-- **Preview display**: resolved conflicts shown in a dedicated "冲突解决" section.
+- **Preview display**: resolved conflicts shown in a dedicated "冲突解决" section. All locations use human-readable target names (e.g., "Claude Code") from config/KNOWN_TOOLS.
+
+### Origin tracking (v0.5.1)
+
+- **`SyncPlan.update_origins`**: `dict[str, Path]` tracks the actual source directory for each skill change (when origin is a target, not source).
+- **Preview accuracy**: target directory updates show the actual origin (e.g., `← Claude Code`) instead of the intermediate source path.
+- **Execution optimization**: skills with known origin are copied directly from the origin target, skipping source as intermediary.
 
 ### Content comparison
 
 - **MD5 directory hashing** (`skill_dir_hash()`): computes hash of all files in a skill directory, excluding hidden files (`.DS_Store`, etc.)
 - **Hidden directory filtering**: all scan functions skip directories with `.` prefix (e.g., `.system/`)
 - **Conflict display**: `_build_version_warning_from_versions()` groups by hash, sorts by mtime, marks suggested version (git-like)
-- **Path display**: all output uses `~/` relative paths (e.g., `~/.claude/skills`), never full paths
+- **Path display**: target directories use human-readable names from config (e.g., "Claude Code") with `~/` short path as fallback; source directory always uses `~/` relative path
 
 ### Test structure
 
@@ -167,6 +173,7 @@ See `docs/DESIGN.md` for:
 
 ## Current status
 
-- **版本**: v0.5.0（Skill 化封装 + AI 友好 CLI）
-- **Phase 4 已完成**: `--dry-run`、改进 help 输出（英文、epilog 示例）、`skills/sync-skills/SKILL.md`、162 个测试
+- **版本**: v0.5.1（预览显示优化 + 变更源头追踪）
+- **Phase 4 已完成**: `--dry-run`、改进 help 输出（英文、epilog 示例）、`skills/sync-skills/SKILL.md`、164 个测试
+- **v0.5.1 改进**: 变更源头追踪（`update_origins`）、预览显示可读工具名、冲突界面精简（去哈希、公共信息只显示一次）、标题栏显示版本号
 - **下一步**: Phase 5 — 多端与协作（v1.0 远期）
