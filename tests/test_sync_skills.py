@@ -1084,6 +1084,40 @@ class TestConflictResolution:
         update_targets = [d for _, _, d in plan.updates]
         assert len(update_targets) == 2
 
+    def test_auto_resolve_stale_target_singleton(self, env):
+        """源+一个目标内容一致且更新，另一个目标是旧版 singleton → 应分发而非收集"""
+        source, target_a, target_b = env
+        create_skill(target_b, "skill-a", "old-ver")
+        time.sleep(1.5)
+        create_skill_in_category(source, "Code", "skill-a", "new-ver")
+        create_skill(target_a, "skill-a", "new-ver")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert not plan.has_conflicts
+        # 不应有 collect_update（不应从 target_b 收集到源）
+        assert not plan.collect_update
+        # 源版本应自动分发到 target_b
+        update_targets = [d for _, _, d in plan.updates]
+        assert target_b in update_targets
+
+    def test_auto_resolve_stale_source_singleton(self, env):
+        """源是旧版 singleton，目标们内容一致且更新 → 应从目标收集到源"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "old-ver")
+        time.sleep(1.5)
+        create_skill(target_a, "skill-a", "new-ver")
+        create_skill(target_b, "skill-a", "new-ver")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        assert not plan.has_conflicts
+        # 不应有 auto_distribute（不应从源分发到目标）
+        update_targets = [d for _, _, d in plan.updates]
+        assert len(update_targets) == 0
+        # 应从目标收集到源
+        assert len(plan.collect_update) == 1
+        _, _, from_dir = plan.collect_update[0]
+        assert from_dir == target_a
+
     def test_apply_resolutions_from_source(self, env):
         """选源版本 → 分发到所有目标"""
         source, target_a, target_b = env
