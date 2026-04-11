@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv run python -m pytest tests/ -v          # run all tests (162 cases)
+uv run python -m pytest tests/ -v          # run all tests (167 cases)
 uv run python -m pytest tests/ -v -k test_collect_new_skill  # run single test
 uv sync                          # install dependencies
 sync-skills                      # run (after pip install -e .)
@@ -29,7 +29,7 @@ Package-based CLI tool (`src/sync_skills/`, Python >= 3.11, depends on PyYAML) t
 
 ```
 src/sync_skills/
-├── __init__.py      # version export (__version__ = "0.5.0")
+├── __init__.py      # version export (__version__ = "0.6.0")
 ├── constants.py     # DEFAULT_SOURCE, DEFAULT_TARGETS, KNOWN_TOOLS, CONFIG_FILE
 ├── config.py        # Config/Target dataclasses, load/save TOML, detect_installed_tools
 ├── metadata.py      # SKILL.md frontmatter parsing (PyYAML), SkillMetadata, search/filter
@@ -43,18 +43,18 @@ skills/
 ### Core flow: Scan → Plan → Conflict Resolution → Preview → Confirm → Execute → Verify
 
 1. **Scan**: `find_skills_in_source()` (recursive, nested categories) and `find_skills_in_target()` (flat, skips hidden dirs)
-2. **Plan**: `preview_bidirectional()` builds a `SyncPlan` using pure hash-based conflict detection (no mtime dependency). Respects `tools`/`exclude_tags` for selective sync.
-3. **Conflict Resolution** (bidirectional mode): `_resolve_conflicts()` interactively resolves conflicts; `_apply_resolutions()` converts choices to collect/create/update operations
-4. **Preview**: `show_preview()` displays the diff with conflict resolution results
+2. **Plan**: `preview_bidirectional()` builds a `SyncPlan` using unified "find latest version → distribute" model. Scans all locations, groups by hash, identifies latest version per skill, generates `SyncOp` list. Respects `tools`/`exclude_tags` for selective sync.
+3. **Conflict Resolution** (bidirectional mode): `_resolve_conflicts()` interactively resolves conflicts, directly generates `SyncOp` for chosen version
+4. **Preview**: `show_preview()` displays the diff with conflict resolution results, all directories shown symmetrically
 5. **Execute**: `execute_bidirectional()` or `execute_force()` applies the plan via `shutil.copytree`/`rmtree`
 6. **Verify**: `verify_sync()` checks content hashes match across all directories
 
 ### Key concepts
 
 - A **skill** is a directory containing a `SKILL.md` file
-- **Source** (`~/Skills/`): nested category structure (e.g., `Code/skill-a/`, `Lark/skill-b/`)
+- **Source** (`~/Skills/`): nested category structure (e.g., `Code/skill-a/`, `Lark/skill-b/`). Treated as a special target directory — not a privileged authority, but a backup and category management location.
 - **Targets** (flat): each tool's skills dir. Categories are flattened — only the leaf directory name matters
-- **Bidirectional mode**: collects new/updated skills from targets into `~/Skills/Other/`, then distributes all skills to targets. Interactive conflict resolution for ambiguous cases.
+- **Bidirectional mode** (unified model, v0.6.0): scans all locations, finds the latest version of each skill (by hash grouping + mtime), and distributes from the latest location to all others. Source directory is just another destination. Interactive conflict resolution for ambiguous cases.
 - **Force mode**: supports interactive base directory selection (`--force` without `-y`). When source dir is a target, preserves nested structure (new skills go to `Other/`, deletes use recursive lookup). Uses MD5 content hash comparison — identical skills are skipped without re-copying.
 - **Selective sync**: `tools` field in SKILL.md frontmatter controls which targets a skill syncs to; `exclude_tags` in config.toml excludes skills with matching tags from all targets
 - Duplicate skill names across categories are a fatal error (would conflict when flattened)
@@ -73,30 +73,33 @@ tools: [claude, codex]  # only sync to these targets (empty = all)
 - `tools` maps to target path parent name: `~/.claude/skills` → `"claude"`
 - Missing/empty fields → sync to all targets (backward compatible)
 
-### Conflict detection (pure hash, v0.3.0)
+### Conflict detection (unified model, v0.6.0)
 
 `preview_bidirectional()` uses pure hash grouping — no mtime for classification:
 
-| Hash groups | Classification | Action |
+| Hash groups | Condition | Action |
 |---|---|---|
-| 1 group | No change | Skip |
-| 2 groups, 1 singleton (single target differs) | Safe auto-resolve | `collect_update` |
-| 2 groups, 1 singleton (source differs) | Conflict | Interactive resolution |
-| 2 groups, both 2+ members | Conflict | Interactive resolution |
-| 3+ groups | Multi-version conflict | Interactive resolution |
+| 1 group | All versions identical | Skip |
+| 2 groups, 1 singleton, majority ≥ 2 | Safe auto-resolve | Use latest version (by mtime), generate `SyncOp` |
+| 2 groups, both 1 member | No majority | Conflict → interactive resolution |
+| 2 groups, 1 singleton, majority = 1 (source) | Source differs from 1 target | Conflict → interactive resolution |
+| 3+ groups | Multi-version | Conflict → interactive resolution |
 
-### Conflict resolution (v0.3.0)
+### Conflict resolution (v0.6.0)
 
 - **Interactive mode** (default): `ask_conflict_resolution()` presents all versions with mtime hint and common SKILL.md preview (name/description shown once). User selects version or skips.
 - **Auto mode** (`-y`): conflicts are converted to warnings (same as v0.2 behavior), sync proceeds without resolving conflicts.
-- **Resolution application**: `_apply_resolutions()` converts user choices to `collect_update`/`creates`/`updates` operations. Respects selective sync filtering.
+- **Resolution**: `_resolve_conflicts()` directly generates `SyncOp` for the chosen version — no intermediate conversion step. Respects selective sync filtering.
 - **Preview display**: resolved conflicts shown in a dedicated "冲突解决" section. All locations use human-readable target names (e.g., "Claude Code") from config/KNOWN_TOOLS.
 
-### Origin tracking (v0.5.1)
+### SyncOp (unified operation, v0.6.0)
 
-- **`SyncPlan.update_origins`**: `dict[str, Path]` tracks the actual source directory for each skill change (when origin is a target, not source).
-- **Preview accuracy**: target directory updates show the actual origin (e.g., `← Claude Code`) instead of the intermediate source path.
-- **Execution optimization**: skills with known origin are copied directly from the origin target, skipping source as intermediary.
+- **`SyncOp(skill_name, origin_dir, dest_dir, dest_rel, origin_rel)`**: copies skill from latest version location to all outdated locations
+- **`origin_dir`**: the directory containing the latest version (can be source or any target)
+- **`dest_dir`**: the directory to update (can be source or any target)
+- **`dest_rel`**: non-None only when `dest_dir` is source (nested path like `"Code/skill-a"`)
+- **`origin_rel`**: non-None only when `origin_dir` is source (nested path for locating skill in source)
+- Source directory is treated symmetrically with targets — it's just a destination with nested category support
 
 ### Content comparison
 
@@ -114,7 +117,7 @@ Additional test files:
 - `tests/test_init.py` — Init wizard tests (config creation, default/custom source): 3 tests
 - `tests/test_metadata.py` — Metadata module tests (frontmatter parsing, filtering, search): 36 tests
 
-Total: 162 tests.
+Total: 167 tests.
 
 ### Delete command
 
@@ -173,7 +176,7 @@ See `docs/DESIGN.md` for:
 
 ## Current status
 
-- **版本**: v0.5.1（预览显示优化 + 变更源头追踪）
-- **Phase 4 已完成**: `--dry-run`、改进 help 输出（英文、epilog 示例）、`skills/sync-skills/SKILL.md`、164 个测试
-- **v0.5.1 改进**: 变更源头追踪（`update_origins`）、预览显示可读工具名、冲突界面精简（去哈希、公共信息只显示一次）、标题栏显示版本号
+- **版本**: v0.6.0（统一同步模型重构）
+- **v0.6.0 改进**: 去中心化统一 SyncOp 模型，源目录降级为特殊目标目录（备份+分类管理），去除了 collect→distribute 两阶段模型、`_apply_resolutions()`、`update_origins` 等中间层
+- **Phase 4 已完成**: `--dry-run`、改进 help 输出（英文、epilog 示例）、`skills/sync-skills/SKILL.md`、167 个测试
 - **下一步**: Phase 5 — 多端与协作（v1.0 远期）
