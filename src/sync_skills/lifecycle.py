@@ -1,4 +1,4 @@
-"""Skill 生命周期管理：add / remove / init"""
+"""Skill 生命周期管理：add / remove / link / uninstall / init"""
 
 import re
 import sys
@@ -174,6 +174,139 @@ def remove_skill(name: str, config: Config, auto_confirm: bool = False) -> bool:
         print(f"  - Agent Skill 目录 symlink 已删除: {', '.join(removed_agent)}")
     if classification.custom_path:
         print(f"  - 自定义 Skill 仓库文件已删除")
+
+    return True
+
+
+# ============================================================
+# link：将野生 skill 纳入管理
+# ============================================================
+
+
+def detect_wild_skills(config: Config) -> list[dict]:
+    """检测所有 Agent 目录和统一 Skill 目录中的野生 skill。
+
+    野生 skill：真实目录（非 symlink），包含 SKILL.md，
+    不在自定义 Skill 仓库中，不在外部 skill lock 文件中。
+
+    返回 [{"name": str, "sources": [Path]}] 列表。
+    """
+    external = get_external_skills(config.external.global_lock, config.external.local_lock)
+    wild_skills: dict[str, list[Path]] = {}
+
+    def _check_dir(directory: Path):
+        """扫描单个目录中的野生 skill。"""
+        if not directory.is_dir():
+            return
+        for d in directory.iterdir():
+            if d.name.startswith(".") or not d.is_dir():
+                continue
+            if not (d / "SKILL.md").is_file():
+                continue
+            if d.is_symlink():
+                continue
+            if d.name in external:
+                continue
+            if (config.repo_skills_dir / d.name).is_dir():
+                continue
+            wild_skills.setdefault(d.name, []).append(d)
+
+    # 扫描所有 Agent 目录
+    for agent_dir in config.effective_agent_dirs:
+        _check_dir(agent_dir)
+
+    # 扫描统一 Skill 目录
+    _check_dir(config.agents_dir)
+
+    # 去重（resolve 后去重，处理 agent dir 和 agents_dir 重叠的情况）
+    result = []
+    for name, srcs in wild_skills.items():
+        unique = list({str(s.resolve()): s for s in srcs}.values())
+        result.append({"name": name, "sources": unique})
+
+    return result
+
+
+def link_skill(name: str, config: Config, auto_confirm: bool = False) -> bool:
+    """将野生 skill（Agent 目录或统一 Skill 目录中的真实文件目录）纳入管理。
+
+    流程：
+    1. 检查是否已被管理（自定义/外部）
+    2. 在 Agent 目录和统一 Skill 目录中查找野生 skill
+    3. 确认后：copy 到自定义 Skill 仓库 → 删除原文件 → 创建 symlink
+    """
+    import shutil
+    from .config import _unexpand_home
+
+    external = get_external_skills(config.external.global_lock, config.external.local_lock)
+
+    # 检查是否已被管理
+    if name in external:
+        print(f"[ERROR] '{name}' 是外部 skill（由 npx skills 管理），不能纳入管理", file=sys.stderr)
+        return False
+
+    repo_skill = config.repo_skills_dir / name
+    if repo_skill.is_dir():
+        print(f"[ERROR] '{name}' 已是自定义 skill（{_unexpand_home(repo_skill)}）", file=sys.stderr)
+        return False
+
+    # 在 Agent 目录和统一 Skill 目录中查找
+    sources = []
+    for agent_dir in config.effective_agent_dirs:
+        skill_path = agent_dir / name
+        if skill_path.is_dir() and not skill_path.is_symlink() and (skill_path / "SKILL.md").is_file():
+            sources.append(skill_path)
+
+    # 也检查统一 Skill 目录
+    agents_skill = config.agents_dir / name
+    if agents_skill.is_dir() and not agents_skill.is_symlink() and (agents_skill / "SKILL.md").is_file():
+        sources.append(agents_skill)
+
+    # 去重
+    sources = list({str(s.resolve()): s for s in sources}.values())
+
+    if not sources:
+        print(f"[ERROR] 未找到野生 skill '{name}'", file=sys.stderr)
+        return False
+
+    # 展示将执行的操作
+    print(f"将 '{name}' 纳入管理：")
+    for s in sources:
+        print(f"  源: {_unexpand_home(s)}")
+    print(f"  目标: {_unexpand_home(repo_skill)}")
+    print(f"  操作: 复制到自定义 Skill 仓库 → 删除原文件 → 创建 symlink")
+
+    if not auto_confirm:
+        try:
+            confirm = input("确认? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return False
+        if confirm != "y":
+            print("已取消")
+            return False
+
+    # 1. 确保 repo 目录存在
+    config.repo_skills_dir.mkdir(parents=True, exist_ok=True)
+
+    # 2. 复制到自定义 Skill 仓库（使用第一个源作为规范版本）
+    shutil.copytree(str(sources[0]), str(repo_skill))
+    print(f"  [OK] 已复制到 {_unexpand_home(repo_skill)}")
+
+    # 3. 删除原文件
+    for s in sources:
+        shutil.rmtree(s)
+        print(f"  [OK] 已删除 {_unexpand_home(s)}")
+
+    # 4. 创建 symlink
+    state = create_all_links(name, config.agents_dir, config.repo_skills_dir, config.effective_agent_dirs, external_skills=external)
+
+    print(f"  [OK] symlink 已创建")
+    if state.agents_link_valid:
+        print(f"     统一 Skill 目录: {_unexpand_home(config.agents_dir / name)} → 自定义 Skill 仓库")
+    if state.agent_links_ok:
+        for agent_name in state.agent_links_ok:
+            print(f"     Agent Skill 目录: ~/{agent_name}/skills/{name} → 统一 Skill 目录")
 
     return True
 

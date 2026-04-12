@@ -5,12 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv run python -m pytest tests/ -v          # run all tests (186 cases)
+uv run python -m pytest tests/ -v          # run all tests (194 cases)
 uv run python -m pytest tests/ -v -k test_collect_new_skill  # run single test
 uv sync                          # install dependencies
 sync-skills                      # show help (no default command)
 sync-skills init                 # initialize ~/Skills/ repo, migrate custom skills
-sync-skills add my-skill         # create new custom skill
+sync-skills link my-skill         # link wild skill into management
+sync-skills link                  # list wild skills available for adoption
+sync-skills add my-skill         # create new custom skill (from template)
 sync-skills remove my-skill      # remove custom skill (permanently)
 sync-skills uninstall my-skill   # uninstall custom skill (restore files)
 sync-skills uninstall -y         # uninstall all custom skills
@@ -96,6 +98,8 @@ skills/
 #### lifecycle.py — Skill CRUD
 
 - `add_skill(name, config, description, tags)`: validate name, check no external conflict, create SKILL.md skeleton, create symlinks
+- `link_skill(name, config, auto_confirm)`: find wild skill in agent directories, confirm, copy to repo, remove originals, create symlinks
+- `detect_wild_skills(config)`: scan agent directories for unmanaged real-directory skills
 - `remove_skill(name, config, auto_confirm)`: classify → must be custom, remove symlinks, delete repo files, fallback cleanup
 - `uninstall_skill(name, config, auto_confirm)`: classify → must be custom, restore files to agents_dir (preserve data), supports `name=None` for all
 - `init_repo(config)`: initialize `~/Skills/` git repo, check git status for existing repos, migrate existing custom skills from `~/.agents/skills/`, create symlinks, initial commit
@@ -103,7 +107,7 @@ skills/
 #### cli.py — Command routing
 
 - `main()` auto-detects legacy arguments (`--source`, `--force`, `--delete`, old subcommands) and routes to `main_legacy()`
-- New commands: `init`, `add`, `remove`, `uninstall`, `list`, `status`, `push`, `pull`, `fix`, `search`, `info`
+- New commands: `init`, `link`, `add`, `remove`, `uninstall`, `list`, `status`, `push`, `pull`, `fix`, `search`, `info`
 - `fix` is the primary verification/repair command; `sync` is kept as compatibility alias
 - No default command: `sync-skills` with no subcommand shows help
 - Git command preview: `push` and `pull` show full git commands before execution
@@ -175,7 +179,7 @@ Additional test files:
 - `tests/test_init.py` — Init wizard tests (config creation, default/custom source): 3 tests
 - `tests/test_metadata.py` — Metadata module tests (frontmatter parsing, filtering, search): 36 tests
 
-Total: 186 tests. All legacy tests pass via auto-routing to `main_legacy()`.
+Total: 204 tests. All legacy tests pass via auto-routing to `main_legacy()`.
 
 ## Design doc
 

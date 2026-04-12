@@ -27,7 +27,7 @@ from . import __version__
 from .classification import classify_all_skills, get_external_skills
 from .config import Config, _unexpand_home, load_config, save_config
 from .git_ops import git_add_commit, git_is_repo, git_pull, git_push, git_status
-from .lifecycle import add_skill, init_repo, remove_skill, uninstall_skill
+from .lifecycle import add_skill, detect_wild_skills, init_repo, link_skill, remove_skill, uninstall_skill
 from .symlink import create_all_links, create_agents_link, sync_all_links
 
 # ============================================================
@@ -124,6 +124,25 @@ def cmd_uninstall(args):
     config = _load_config_or_default(args)
     if uninstall_skill(getattr(args, "name", None), config, auto_confirm=args.yes):
         _verify_after_change(config)
+
+
+def cmd_link(args):
+    """将野生 skill 纳入管理。"""
+    config = _load_config_or_default(args)
+    if args.name:
+        if link_skill(args.name, config, auto_confirm=args.yes):
+            _verify_after_change(config)
+    else:
+        wild = detect_wild_skills(config)
+        if not wild:
+            print("没有发现野生 skill")
+            return
+        print(f"发现 {len(wild)} 个野生 skill:\n")
+        for item in wild:
+            print(f"  {item['name']}")
+            for src in item['sources']:
+                print(f"      {_unexpand_home(src)}")
+        print(f"\n使用 'sync-skills link <name> -y' 纳入管理")
 
 
 def cmd_list(args):
@@ -681,6 +700,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sub_add.add_argument("--tags", "-t", default="", help="comma-separated tags")
     sub_add.add_argument("--config", type=Path, default=None)
 
+    # link
+    sub_link = subparsers.add_parser("link", help="link wild skill into management")
+    sub_link.add_argument("name", nargs="?", default=None, help="skill name (omit to list wild skills)")
+    sub_link.add_argument("--config", type=Path, default=None)
+    sub_link.add_argument("-y", "--yes", action="store_true")
+
     # remove
     sub_remove = subparsers.add_parser("remove", help="remove custom skill")
     sub_remove.add_argument("name", help="skill name")
@@ -766,6 +791,7 @@ def main(argv: list[str] | None = None):
     # 命令分发
     commands = {
         "init": cmd_init,
+        "link": cmd_link,
         "add": cmd_add,
         "remove": cmd_remove,
         "uninstall": cmd_uninstall,

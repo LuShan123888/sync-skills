@@ -25,6 +25,8 @@ AI agents **cannot interact with stdin**. Always append `-y` to skip confirmatio
 | User intent | Command |
 |---|---|
 | Initialize ~/Skills/ repo | `sync-skills init` |
+| Link a wild skill | `sync-skills link skill-name -y` |
+| List wild skills | `sync-skills link` |
 | Create new custom skill | `sync-skills add skill-name -d "description" -y` |
 | Verify/repair symlinks | `sync-skills fix -y` |
 | List custom skills | `sync-skills list` |
