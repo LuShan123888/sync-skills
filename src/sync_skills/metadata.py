@@ -7,7 +7,10 @@ from pathlib import Path
 
 import yaml
 
-from .cli import log_warning
+
+def _log_warning(msg: str) -> None:
+    """向 stderr 输出警告。"""
+    print(f"[WARNING] {msg}", file=sys.stderr)
 
 # frontmatter 正则：匹配 ---\n...\n---\n
 FRONTMATTER_PATTERN = re.compile(
@@ -82,7 +85,7 @@ def _parse_frontmatter_content(content: str) -> SkillMetadata:
     try:
         data = yaml.safe_load(yaml_str)
     except yaml.YAMLError:
-        log_warning("YAML frontmatter 格式错误，跳过元数据解析")
+        _log_warning("YAML frontmatter 格式错误，跳过元数据解析")
         return SkillMetadata()
 
     if not isinstance(data, dict):

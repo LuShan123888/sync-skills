@@ -1,12 +1,12 @@
 ---
 name: sync-skills
-description: "Sync, manage, and query AI coding agent skills across multiple tools (Claude Code, Codex CLI, Gemini CLI, OpenClaw). Use when the user wants to sync skills, check skill status, list/search/query skills, delete a skill, initialize skill config, or manage skill distribution. TRIGGER on: 'sync skills', '同步', 'force sync', '强制同步', 'skill management', 'list skills', 'search skills', 'delete skill', 'sync-skills'."
+description: "Manage custom AI coding agent skills via git + symlink. Use when the user wants to add/remove/list/search custom skills, check git status, push/pull skill changes, or verify symlinks. TRIGGER on: 'sync-skills', 'add skill', 'remove skill', 'skill management', 'list skills', 'custom skill'."
 tools: [Bash]
 ---
 
 # sync-skills
 
-Unified skill management and sync tool for AI coding agents. Maintains a single categorized source directory (`~/Skills/`) and distributes skills to all installed tools.
+Custom skill lifecycle manager for AI coding agents. Manages user-created skills via git + symlink, separate from external skills managed by `npx skills`.
 
 ## Prerequisites
 
@@ -18,98 +18,100 @@ uv tool install sync-skills
 
 ## Important: Always Use `-y`
 
-AI agents **cannot interact with stdin**. Always append `-y` to skip confirmation prompts. Never run sync-skills without `-y` unless the user explicitly asks for interactive mode.
+AI agents **cannot interact with stdin**. Always append `-y` to skip confirmation prompts.
 
 ## Commands Reference
 
 | User intent | Command |
 |---|---|
-| Sync skills (bidirectional) | `sync-skills -y` |
-| Force sync (source is truth) | `sync-skills --force -y` |
-| Preview changes only | `sync-skills --dry-run` |
-| Preview force sync only | `sync-skills --force --dry-run` |
-| Initialize config | `sync-skills init` |
-| List all skills | `sync-skills list` |
-| List skills by tag | `sync-skills list --tags code` |
-| Search skills | `sync-skills search "review"` |
+| Initialize ~/Skills/ repo | `sync-skills init` |
+| Create new custom skill | `sync-skills add skill-name -d "description" -y` |
+| Verify/repair symlinks | `sync-skills fix -y` |
+| List custom skills | `sync-skills list` |
+| Show git status | `sync-skills status` |
+| Commit and push | `sync-skills push -m "update" -y` |
+| Pull and rebuild | `sync-skills pull -y` |
+| Search skills | `sync-skills search "query"` |
 | Show skill details | `sync-skills info skill-name` |
-| Delete a skill | `sync-skills --delete skill-name -y` |
-| Delete with dry-run | `sync-skills --delete skill-name --dry-run` |
+| Remove custom skill | `sync-skills remove skill-name -y` |
+| Uninstall custom skill | `sync-skills uninstall skill-name -y` |
+| Uninstall all custom skills | `sync-skills uninstall -y` |
+| Legacy copy sync | `sync-skills --copy -y` |
 
 ## Common Workflows
 
-### 1. Sync after editing a skill
+### 1. Create a new custom skill
 
 ```bash
-sync-skills -y
+sync-skills add my-skill -d "My custom skill description" -t "tag1,tag2" -y
 ```
 
-Collects new/updated skills from all tools and redistributes.
+Creates `~/Skills/skills/my-skill/SKILL.md` with skeleton and symlinks to all agent directories.
 
-### 2. Check what would change (safe preview)
+### 2. Edit a skill (via agent)
+
+The agent edits `~/.claude/skills/my-skill/SKILL.md` normally. Changes flow through symlinks to `~/Skills/skills/my-skill/SKILL.md` automatically.
+
+### 3. Push changes to GitHub
 
 ```bash
-sync-skills --dry-run
+sync-skills status       # check what changed
+sync-skills push -m "update my-skill" -y
 ```
 
-Shows the full plan (collect, create, update, delete) without executing anything.
+Shows full git commands (`git add -A`, `git commit -m "..."`, `git push -u origin <branch>`) before confirming.
 
-### 3. Force sync after reorganization
+### 4. Pull changes from another machine
 
 ```bash
-sync-skills --force -y
+sync-skills pull -y      # git pull + rebuild symlinks
 ```
 
-Makes source directory the single source of truth: adds missing skills, overwrites different content, removes extras.
+Shows full git command (`git pull --rebase`) before confirming. Automatically repairs symlinks after pull.
 
-### 4. Delete an obsolete skill
+### 5. Check skill classification
 
 ```bash
-sync-skills --delete skill-name -y
+sync-skills info my-skill
 ```
 
-Removes from source directory and all target directories.
+Shows whether a skill is "custom" (managed by sync-skills) or "external" (managed by npx skills).
 
-### 5. Find a specific skill
+### 6. Verify and repair symlinks
 
 ```bash
-sync-skills search "review"
-sync-skills info code-review
+sync-skills fix -y
 ```
+
+Checks all custom skill symlinks, repairs broken links, detects missing links and orphan skills.
 
 ## Flags
 
 | Flag | Purpose |
 |---|---|
-| `-y`, `--yes` | Skip confirmation (always use this) |
-| `--dry-run` | Show plan without executing |
-| `--force`, `-f` | Force sync mode |
-| `--delete NAME`, `-d NAME` | Delete a skill |
-| `--source DIR` | Override source directory |
-| `--targets DIR1,DIR2` | Override target directories |
+| `-y`, `--yes` | Skip confirmation |
+| `--dry-run` | Preview without executing |
+| `--copy` | Use legacy copy-based sync |
 | `--config PATH` | Use custom config file |
-| `--tags TAG1,TAG2` | Filter by tags (list command only) |
+| `--message`, `-m` | Commit message (push command) |
+| `--description`, `-d` | Skill description (add command) |
+| `--tags`, `-t` | Comma-separated tags (add command) |
+
+## Architecture
+
+- **Custom skills**: stored in `~/Skills/` git repo, symlinked to `~/.agents/skills/`
+- **External skills**: managed by `npx skills`, stored as real files in `~/.agents/skills/`
+- **Detection**: external skills identified via lock files (`~/.agents/.skill-lock.json`, `~/skills-lock.json`)
 
 ## Config File
 
 Location: `~/.config/sync-skills/config.toml`
 
 ```toml
-source = "~/Skills"
+repo = "~/Skills"
+agents_dir = "~/.agents/skills"
 
-[sync]
-exclude_tags = ["experimental", "wip"]
-
-[[targets]]
-name = "Claude Code"
-path = "~/.claude/skills"
+[external]
+global_lock = "~/.agents/.skill-lock.json"
+local_lock = "~/skills-lock.json"
 ```
-
-## Error Handling
-
-| Error | Cause | Resolution |
-|---|---|---|
-| "源目录存在重名 skill" | Same skill name in multiple categories | Rename one of the duplicates in `~/Skills/` |
-| "skill 'xxx' 不存在" | Delete target not found | Check spelling with `sync-skills list` |
-| "源目录不存在" | Source directory missing | Create it or run `sync-skills init` |
-| Conflict warnings | Multiple versions with different content | Run `sync-skills` without `-y` for interactive resolution, or manually reconcile |

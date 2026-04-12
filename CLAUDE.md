@@ -5,59 +5,152 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-uv run python -m pytest tests/ -v          # run all tests (167 cases)
+uv run python -m pytest tests/ -v          # run all tests (186 cases)
 uv run python -m pytest tests/ -v -k test_collect_new_skill  # run single test
 uv sync                          # install dependencies
-sync-skills                      # run (after pip install -e .)
-sync-skills --force -y           # force sync, skip confirm
-sync-skills --dry-run            # preview changes without executing
-sync-skills init                 # interactive config wizard
-sync-skills --delete skill-name  # delete skill from source + all targets
-sync-skills -d skill-name -y     # delete with auto-confirm
+sync-skills                      # show help (no default command)
+sync-skills init                 # initialize ~/Skills/ repo, migrate custom skills
+sync-skills add my-skill         # create new custom skill
+sync-skills remove my-skill      # remove custom skill (permanently)
+sync-skills uninstall my-skill   # uninstall custom skill (restore files)
+sync-skills uninstall -y         # uninstall all custom skills
+sync-skills list                 # list custom skills
+sync-skills status               # show git status + skill management state
+sync-skills push -m "update"     # git commit + push (shows git commands, confirms before executing)
+sync-skills pull                 # git pull + rebuild symlinks (shows git command, confirms before executing)
+sync-skills fix                  # verify/repair all symlinks + detect broken/missing/orphan skills
+sync-skills search "review"      # search custom skills
+sync-skills info skill-name      # show skill details (with classification)
+sync-skills --copy               # legacy copy-based sync (v0.6)
+sync-skills --copy --force -y    # legacy force sync
 sync-skills --config /path/to/config.toml  # use custom config
-sync-skills list                 # list all skills grouped by category
-sync-skills list --tags code     # filter by tags
-sync-skills search "review"      # full-text search
-sync-skills info skill-name      # show skill details
 ```
 
 ## Architecture
 
-Package-based CLI tool (`src/sync_skills/`, Python >= 3.11, depends on PyYAML) that syncs AI coding agent skills between a categorized source directory (`~/Skills/`) and multiple flat target directories (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
+v1.0 — Custom Skill Lifecycle Manager. Manages user-created skills via git + symlink, separate from external skills managed by `npx skills`.
+
+### Two-type skill architecture
+
+| Type | Source | Storage | Manager |
+|------|--------|---------|---------|
+| External | `npx skills install` | Real files in `~/.agents/skills/` | npx skills |
+| Custom | User-created | Git repo `~/Skills/skills/` | sync-skills |
+
+**Symlink chain**:
+```
+~/Skills/skills/<name>/    ← git repo (real files, single source of truth)
+       ↓ symlink
+~/.agents/skills/<name>/   ← central directory (all agents read from here)
+       ↓ symlink
+<agent-dir>/skills/<name>/ ← per-agent directory (e.g., ~/.claude/skills/)
+```
 
 ### Package structure
 
 ```
 src/sync_skills/
-├── __init__.py      # version export (__version__ = "0.6.0")
-├── constants.py     # DEFAULT_SOURCE, DEFAULT_TARGETS, KNOWN_TOOLS, CONFIG_FILE
-├── config.py        # Config/Target dataclasses, load/save TOML, detect_installed_tools
-├── metadata.py      # SKILL.md frontmatter parsing (PyYAML), SkillMetadata, search/filter
-└── cli.py           # all sync logic, CLI parsing, init wizard, conflict resolution, list/search/info
+├── __init__.py          # version export (__version__ = "1.0.0")
+├── constants.py         # defaults, lock file paths, SKILL_SKELETON, legacy constants
+├── config.py            # Config/ExternalConfig dataclasses, load/save TOML, detect_installed_tools
+├── metadata.py          # SKILL.md frontmatter parsing (PyYAML), SkillMetadata, search/filter
+├── classification.py    # custom vs external skill classification via lock files
+├── symlink.py           # two-layer symlink management (agents + agent dirs)
+├── git_ops.py           # git operations wrapper (init/clone/status/add/commit/push/pull)
+├── lifecycle.py         # add/remove/init skill commands
+├── sync_legacy.py       # v0.6 copy sync logic (extracted from old cli.py, used via --copy)
+└── cli.py               # command routing, argparse subparsers, re-exports legacy functions
 
 skills/
 └── sync-skills/
     └── SKILL.md     # AI skill: teaches AI models how to use this CLI tool
 ```
 
-### Core flow: Scan → Plan → Conflict Resolution → Preview → Confirm → Execute → Verify
+### Core modules
 
-1. **Scan**: `find_skills_in_source()` (recursive, nested categories) and `find_skills_in_target()` (flat, skips hidden dirs)
-2. **Plan**: `preview_bidirectional()` builds a `SyncPlan` using unified "find latest version → distribute" model. Scans all locations, groups by hash, identifies latest version per skill, generates `SyncOp` list. Respects `tools`/`exclude_tags` for selective sync.
-3. **Conflict Resolution** (bidirectional mode): `_resolve_conflicts()` interactively resolves conflicts, directly generates `SyncOp` for chosen version
-4. **Preview**: `show_preview()` displays the diff with conflict resolution results, all directories shown symmetrically
-5. **Execute**: `execute_bidirectional()` or `execute_force()` applies the plan via `shutil.copytree`/`rmtree`
-6. **Verify**: `verify_sync()` checks content hashes match across all directories
+#### classification.py — Skill type detection
+
+- Lock files: `~/.agents/.skill-lock.json` (global) and `~/skills-lock.json` (local)
+- `classify_skill(name, agents_dir, repo_skills_dir, external)`: returns `SkillClass` with `skill_type` (custom/external/orphan)
+- `classify_all_skills()`: scans all skills and classifies them
+- `get_external_skills()`: loads both lock files and returns set of external skill names
+
+#### symlink.py — Two-layer symlink management
+
+- `create_agents_link()`: `~/.agents/skills/<name>` → `~/Skills/skills/<name>`
+- `create_agent_links()`: `<agent-dir>/skills/<name>` → `~/.agents/skills/<name>`
+- `sync_all_links()`: scan all custom skills, create/verify/repair symlinks; accepts `external_skills` to skip external skills
+- `verify_links()`: check symlink integrity, report broken/missing links
+- `remove_agents_link()` / `remove_agent_links()`: only removes symlinks pointing to expected targets
+- `create_agents_link()`: detects and fixes circular symlinks from old architecture
+
+#### git_ops.py — Git operations
+
+- `git_is_repo()`, `git_init()`, `git_clone()`: repo management
+- `git_status()` → `GitStatus`: branch, clean/dirty, modified/staged/untracked, ahead/behind
+- `git_add_commit()`, `git_push()`, `git_pull()`: sync operations
+- `git_push()` returns `tuple[bool, str]` with error classification ("behind", "auth", "bad_url", "unknown")
+- `git_pull()` auto-detects missing tracking and falls back to `git pull --rebase origin <branch>`, auto-aborts on rebase failure
+- `git_has_remote()`, `git_add_remote()`, `git_get_remote_url()`, `git_get_tracking_branch()`: remote management
+
+#### lifecycle.py — Skill CRUD
+
+- `add_skill(name, config, description, tags)`: validate name, check no external conflict, create SKILL.md skeleton, create symlinks
+- `remove_skill(name, config, auto_confirm)`: classify → must be custom, remove symlinks, delete repo files, fallback cleanup
+- `uninstall_skill(name, config, auto_confirm)`: classify → must be custom, restore files to agents_dir (preserve data), supports `name=None` for all
+- `init_repo(config)`: initialize `~/Skills/` git repo, check git status for existing repos, migrate existing custom skills from `~/.agents/skills/`, create symlinks, initial commit
+
+#### cli.py — Command routing
+
+- `main()` auto-detects legacy arguments (`--source`, `--force`, `--delete`, old subcommands) and routes to `main_legacy()`
+- New commands: `init`, `add`, `remove`, `uninstall`, `list`, `status`, `push`, `pull`, `fix`, `search`, `info`
+- `fix` is the primary verification/repair command; `sync` is kept as compatibility alias
+- No default command: `sync-skills` with no subcommand shows help
+- Git command preview: `push` and `pull` show full git commands before execution
+- Pre/post operation verification: `_check_state()` before pull, `_verify_after_change()` after add/remove/uninstall
+- `_do_sync()`: interactive verification + repair (broken links, missing links, orphan adoption)
+- `--copy` flag enters legacy copy sync mode
+- Re-exports all legacy functions from `sync_legacy` for backward compatibility
+
+#### sync_legacy.py — Legacy copy sync
+
+- Complete v0.6 copy sync logic extracted from old `cli.py` (~1464 lines)
+- Renamed entry points: `main_legacy()`, `parse_legacy_args()`
+- All old data structures (`Skill`, `SyncPlan`, `SyncOp`, `Color`, etc.) and functions preserved
 
 ### Key concepts
 
 - A **skill** is a directory containing a `SKILL.md` file
-- **Source** (`~/Skills/`): nested category structure (e.g., `Code/skill-a/`, `Lark/skill-b/`). Treated as a special target directory — not a privileged authority, but a backup and category management location.
-- **Targets** (flat): each tool's skills dir. Categories are flattened — only the leaf directory name matters
-- **Bidirectional mode** (unified model, v0.6.0): scans all locations, finds the latest version of each skill (by hash grouping + mtime), and distributes from the latest location to all others. Source directory is just another destination. Interactive conflict resolution for ambiguous cases.
-- **Force mode**: supports interactive base directory selection (`--force` without `-y`). When source dir is a target, preserves nested structure (new skills go to `Other/`, deletes use recursive lookup). Uses MD5 content hash comparison — identical skills are skipped without re-copying.
-- **Selective sync**: `tools` field in SKILL.md frontmatter controls which targets a skill syncs to; `exclude_tags` in config.toml excludes skills with matching tags from all targets
-- Duplicate skill names across categories are a fatal error (would conflict when flattened)
+- **Custom skills**: stored in `~/Skills/skills/` git repo, symlinked to `~/.agents/skills/`
+- **External skills**: managed by `npx skills`, stored as real files in `~/.agents/skills/`
+- **Orphan skills**: exist in `~/.agents/skills/` but not tracked by either system
+- **Detection**: external skills identified via lock files (`~/.agents/.skill-lock.json`, `~/skills-lock.json`)
+- **fix command**: verifies and repairs all custom skill symlinks; detects broken links, missing links, and orphan skills
+- **No default command**: `sync-skills` with no subcommand shows help
+
+### Config file
+
+Stored at `~/.config/sync-skills/config.toml` (or custom path via `--config`):
+
+```toml
+repo = "~/Skills"
+agents_dir = "~/.agents/skills"
+
+[external]
+global_lock = "~/.agents/.skill-lock.json"
+local_lock = "~/skills-lock.json"
+
+# Legacy fields (only used in --copy mode)
+# source = "~/Skills"
+# [[targets]]
+# name = "builtin"
+# path = "~/.claude/skills"
+```
+
+- `repo`: git repo path for custom skills
+- `agents_dir`: central directory path
+- `external.global_lock` / `external.local_lock`: lock files for external skill detection
+- Legacy fields (`source`, `targets`, `exclude_tags`) preserved for `--copy` mode
 
 ### SKILL.md frontmatter (optional)
 
@@ -65,104 +158,32 @@ skills/
 ---
 tags: [code, review]
 description: "代码审查工具"
-tools: [claude, codex]  # only sync to these targets (empty = all)
+tools: [claude, codex]  # only sync to these targets in --copy mode
 ---
 ```
 
 - Parsed by `metadata.py` using PyYAML
-- `tools` maps to target path parent name: `~/.claude/skills` → `"claude"`
+- `tools` maps to target path parent name: `~/.claude/skills` → `"claude"` (legacy --copy mode only)
 - Missing/empty fields → sync to all targets (backward compatible)
-
-### Conflict detection (unified model, v0.6.0)
-
-`preview_bidirectional()` uses pure hash grouping — no mtime for classification:
-
-| Hash groups | Condition | Action |
-|---|---|---|
-| 1 group | All versions identical | Skip |
-| 2 groups, 1 singleton, majority ≥ 2 | Safe auto-resolve | Use latest version (by mtime), generate `SyncOp` |
-| 2 groups, both 1 member | No majority | Conflict → interactive resolution |
-| 2 groups, 1 singleton, majority = 1 (source) | Source differs from 1 target | Conflict → interactive resolution |
-| 3+ groups | Multi-version | Conflict → interactive resolution |
-
-### Conflict resolution (v0.6.0)
-
-- **Interactive mode** (default): `ask_conflict_resolution()` presents all versions with mtime hint and common SKILL.md preview (name/description shown once). User selects version or skips.
-- **Auto mode** (`-y`): conflicts are converted to warnings (same as v0.2 behavior), sync proceeds without resolving conflicts.
-- **Resolution**: `_resolve_conflicts()` directly generates `SyncOp` for the chosen version — no intermediate conversion step. Respects selective sync filtering.
-- **Preview display**: resolved conflicts shown in a dedicated "冲突解决" section. All locations use human-readable target names (e.g., "Claude Code") from config/KNOWN_TOOLS.
-
-### SyncOp (unified operation, v0.6.0)
-
-- **`SyncOp(skill_name, origin_dir, dest_dir, dest_rel, origin_rel)`**: copies skill from latest version location to all outdated locations
-- **`origin_dir`**: the directory containing the latest version (can be source or any target)
-- **`dest_dir`**: the directory to update (can be source or any target)
-- **`dest_rel`**: non-None only when `dest_dir` is source (nested path like `"Code/skill-a"`)
-- **`origin_rel`**: non-None only when `origin_dir` is source (nested path for locating skill in source)
-- Source directory is treated symmetrically with targets — it's just a destination with nested category support
-
-### Content comparison
-
-- **MD5 directory hashing** (`skill_dir_hash()`): computes hash of all files in a skill directory, excluding hidden files (`.DS_Store`, etc.)
-- **Hidden directory filtering**: all scan functions skip directories with `.` prefix (e.g., `.system/`)
-- **Conflict display**: `_build_version_warning_from_versions()` groups by hash, sorts by mtime, marks suggested version (git-like)
-- **Path display**: target directories use human-readable names from config (e.g., "Claude Code") with `~/` short path as fallback; source directory always uses `~/` relative path
 
 ### Test structure
 
-Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`, `TestBaseSelection`, `TestConflictResolution`, `TestSelectiveSync`, `TestListCommand`, `TestSearchCommand`, `TestInfoCommand`, `TestDryRun`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation.
+Tests in `tests/test_sync_skills.py` use `tmp_path` fixtures, organized by class: `TestScan`, `TestBidirectional`, `TestForce`, `TestDelete`, `TestErrors`, `TestPreview`, `TestMultiTarget`, `TestUserScenarios`, `TestBaseSelection`, `TestConflictResolution`, `TestSelectiveSync`, `TestListCommand`, `TestSearchCommand`, `TestInfoCommand`, `TestDryRun`, `TestAddCommand`, `TestRemoveCommand`, `TestUninstallCommand`, `TestSymlinkIsolation`, `TestPushCommand`. Helper functions `create_skill()` (flat) and `create_skill_in_category()` (nested) set up test fixtures. All tests pass `-y` to skip confirmation.
 
 Additional test files:
 - `tests/test_config.py` — Config module tests (load, save, path expand/unexpand, detect tools, exclude_tags): 18 tests
 - `tests/test_init.py` — Init wizard tests (config creation, default/custom source): 3 tests
 - `tests/test_metadata.py` — Metadata module tests (frontmatter parsing, filtering, search): 36 tests
 
-Total: 167 tests.
-
-### Delete command
-
-**Usage:** `--delete <skill-name>` or `-d <skill-name>` removes a skill from both source and all target directories. Default mode shows preview and requires confirmation; `-y` flag auto-confirms.
-
-**Safety:** Before deletion, verifies skill exists in at least one location. Shows detailed preview: which directories contain the skill, total deletion count. Non-existent skills trigger error message without side effects.
-
-**When to use:** Removing obsolete or unwanted skills that exist in multiple locations. More efficient than manual deletion across 4+ directories.
-
-### Init command
-
-**Usage:** `sync-skills init` launches an interactive wizard that creates `~/.config/sync-skills/config.toml`.
-
-Steps:
-1. Source directory (default: `~/Skills`)
-2. Detect installed tools and let user select targets
-3. Optionally add custom target paths
-
-**Custom config:** `sync-skills --config /path/to/config.toml` to use a non-default config file.
-
-### Config file
-
-Stored at `~/.config/sync-skills/config.toml` (or custom path via `--config`):
-
-```toml
-source = "~/Skills"
-
-# 同步过滤（可选）
-[sync]
-exclude_tags = ["experimental", "wip"]
-
-[[targets]]
-name = "Claude Code"
-path = "~/.claude/skills"
-```
-
-- CLI args (`--source`, `--targets`) override config values
-- Missing config → falls back to built-in defaults (backward compatible)
+Total: 186 tests. All legacy tests pass via auto-routing to `main_legacy()`.
 
 ## Design doc
 
 See `docs/DESIGN.md` for:
+- 当前架构（第 2 节）— v1.0 两类 skill 分管 + 软链接链路
 - 用户场景与预期行为（第 3 节）— 所有同步场景的完整定义
-- 当前已知限制（第 4 节）
-- 演进规划（第 5 节）— Phase 3: 元数据与索引（已完成）
+- 当前已知限制（第 4 节）— 含 v1.0 新增限制
+- 演进规划（第 5 节）— Phase 5: Git + 软链接管理（v1.0 已完成）
 - 变更日志（第 7 节）— 每次讨论的关键决策和代码变更记录
 
 ## Cross-session workflow
@@ -176,7 +197,9 @@ See `docs/DESIGN.md` for:
 
 ## Current status
 
-- **版本**: v0.6.0（统一同步模型重构）
-- **v0.6.0 改进**: 去中心化统一 SyncOp 模型，源目录降级为特殊目标目录（备份+分类管理），去除了 collect→distribute 两阶段模型、`_apply_resolutions()`、`update_origins` 等中间层
-- **Phase 4 已完成**: `--dry-run`、改进 help 输出（英文、epilog 示例）、`skills/sync-skills/SKILL.md`、167 个测试
-- **下一步**: Phase 5 — 多端与协作（v1.0 远期）
+- **版本**: v1.0.1（自定义 Skill 生命周期管理器）
+- **v1.0.1 增强**: 外部 Skill 全链路隔离、uninstall 命令、增强 status/fix/push、git 命令预览、孤儿 skill 检测、操作前后自动验证、sync→fix 重命名、无默认命令
+- **v1.0.0 重构**: 从 copy 同步工具重构为 git + symlink 自定义 skill 管理器，与 npx skills 共存（两类 skill 分管）
+- **模块**: 9 个模块（新增 classification.py、symlink.py、git_ops.py、lifecycle.py、sync_legacy.py）
+- **兼容**: 旧版 copy 同步逻辑提取到 sync_legacy.py，通过 `--copy` flag 保持兼容；167 个旧测试全部通过
+- **文档**: README.md、docs/DESIGN.md、SKILL.md、CLAUDE.md 均已更新至 v1.0.1

@@ -1577,3 +1577,303 @@ class TestDryRun:
         assert (source / "Code" / "skill-a" / "SKILL.md").read_text() == "source-ver"
         assert (target_a / "skill-a" / "SKILL.md").read_text() == "target-a-ver"
         assert (target_b / "skill-a" / "SKILL.md").read_text() == "target-b-ver"
+
+
+# ============================================================
+# v1.0 新命令测试：add / remove / uninstall / push / pull / init
+# ============================================================
+
+
+def _create_v1_env(tmp_path: Path):
+    """创建 v1.0 测试环境：repo + agents_dir + agent_dirs + config"""
+    import json
+    from sync_skills.config import Config, ExternalConfig
+
+    repo = tmp_path / "Skills"
+    repo_skills = repo / "skills"
+    agents_dir = tmp_path / ".agents" / "skills"
+    agent_dirs = [tmp_path / ".claude" / "skills", tmp_path / ".codex" / "skills"]
+
+    for d in [repo_skills, agents_dir] + agent_dirs:
+        d.mkdir(parents=True)
+
+    # 外部 skill lock 文件
+    global_lock = tmp_path / ".agents" / ".skill-lock.json"
+    local_lock = tmp_path / "skills-lock.json"
+    global_lock.write_text('{"skills": {"external-skill": {"source": "npm"}}}')
+    local_lock.write_text('{}')
+
+    config = Config(
+        repo=repo,
+        agents_dir=agents_dir,
+        agent_dirs=agent_dirs,
+        external=ExternalConfig(global_lock=global_lock, local_lock=local_lock),
+    )
+    return repo, repo_skills, agents_dir, agent_dirs, config
+
+
+class TestAddCommand:
+    """测试 sync-skills add 命令"""
+
+    def test_add_creates_skill_in_repo(self, tmp_path):
+        """add 应在 repo 中创建真实文件"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        result = add_skill("my-skill", config, description="test skill")
+        assert result is True
+        assert (repo_skills / "my-skill" / "SKILL.md").is_file()
+
+    def test_add_creates_agents_symlink(self, tmp_path):
+        """add 应创建统一 Skill 目录 symlink"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        add_skill("my-skill", config)
+        link = agents_dir / "my-skill"
+        assert link.is_symlink()
+        assert link.resolve() == (repo_skills / "my-skill").resolve()
+
+    def test_add_creates_agent_symlinks(self, tmp_path):
+        """add 应创建 Agent Skill 目录 symlink"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        add_skill("my-skill", config)
+        for ad in agent_dirs:
+            link = ad / "my-skill"
+            assert link.is_symlink()
+
+    def test_add_rejects_duplicate_in_repo(self, tmp_path):
+        """add 应拒绝已存在于 repo 的 skill"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        add_skill("my-skill", config)
+        result = add_skill("my-skill", config)
+        assert result is False
+
+    def test_add_rejects_duplicate_in_agents(self, tmp_path):
+        """add 应拒绝已存在于 agents_dir 的 skill"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        # 在 agents_dir 创建外部 skill（真实目录）
+        ext_dir = agents_dir / "ext-skill"
+        ext_dir.mkdir()
+        (ext_dir / "SKILL.md").write_text("---\nname: ext\n---\n")
+
+        result = add_skill("ext-skill", config)
+        assert result is False
+
+    def test_add_rejects_external_skill(self, tmp_path):
+        """add 应拒绝 lock 文件中的外部 skill"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        result = add_skill("external-skill", config)
+        assert result is False
+
+    def test_add_with_tags(self, tmp_path):
+        """add 应支持 tags 参数"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        add_skill("my-skill", config, tags=["code", "review"])
+        content = (repo_skills / "my-skill" / "SKILL.md").read_text()
+        assert "code" in content
+        assert "review" in content
+
+
+class TestRemoveCommand:
+    """测试 sync-skills remove 命令"""
+
+    def test_remove_deletes_all_artifacts(self, tmp_path):
+        """remove 应删除 repo 文件和所有 symlink"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, remove_skill
+
+        add_skill("my-skill", config)
+        result = remove_skill("my-skill", config, auto_confirm=True)
+        assert result is True
+        assert not (repo_skills / "my-skill").exists()
+        assert not (agents_dir / "my-skill").exists()
+        for ad in agent_dirs:
+            assert not (ad / "my-skill").exists()
+
+    def test_remove_then_add_succeeds(self, tmp_path):
+        """remove 后应该能重新 add 同名 skill（bad case: 之前 remove 不彻底导致 add 失败）"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, remove_skill
+
+        add_skill("my-skill", config)
+        remove_skill("my-skill", config, auto_confirm=True)
+
+        # 关键验证：remove 后 agents_dir 不应残留
+        assert not (agents_dir / "my-skill").exists()
+
+        # 应该能重新 add
+        result = add_skill("my-skill", config)
+        assert result is True
+
+    def test_remove_rejects_external(self, tmp_path):
+        """remove 应拒绝外部 skill"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import remove_skill
+
+        result = remove_skill("external-skill", config, auto_confirm=True)
+        assert result is False
+
+    def test_remove_rejects_orphan(self, tmp_path):
+        """remove 应拒绝未管理的 skill"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import remove_skill
+
+        result = remove_skill("nonexistent", config, auto_confirm=True)
+        assert result is False
+
+
+class TestUninstallCommand:
+    """测试 sync-skills uninstall 命令"""
+
+    def test_uninstall_restores_files(self, tmp_path):
+        """uninstall 应将文件还原到统一 Skill 目录"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, uninstall_skill
+
+        add_skill("my-skill", config)
+        result = uninstall_skill("my-skill", config, auto_confirm=True)
+        assert result is True
+
+        # repo 中不应存在
+        assert not (repo_skills / "my-skill").exists()
+        # agents_dir 应有真实文件
+        assert (agents_dir / "my-skill" / "SKILL.md").is_file()
+        assert not (agents_dir / "my-skill").is_symlink()
+
+    def test_uninstall_preserves_agent_symlinks(self, tmp_path):
+        """uninstall 应保留 Agent Skill 目录 symlink"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, uninstall_skill
+
+        add_skill("my-skill", config)
+        uninstall_skill("my-skill", config, auto_confirm=True)
+
+        # Agent symlink 仍存在且有效
+        for ad in agent_dirs:
+            link = ad / "my-skill"
+            assert link.is_symlink()
+            assert link.resolve().exists()
+
+    def test_uninstall_all(self, tmp_path):
+        """uninstall 不指定 name 时应卸载所有自定义 skill"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, uninstall_skill
+
+        add_skill("skill-a", config)
+        add_skill("skill-b", config)
+        add_skill("skill-c", config)
+
+        result = uninstall_skill(None, config, auto_confirm=True)
+        assert result is True
+
+        # repo 应为空
+        assert not any(repo_skills.iterdir())
+        # agents_dir 应有 3 个真实目录
+        assert (agents_dir / "skill-a" / "SKILL.md").is_file()
+        assert (agents_dir / "skill-b" / "SKILL.md").is_file()
+        assert (agents_dir / "skill-c" / "SKILL.md").is_file()
+
+    def test_uninstall_rejects_external(self, tmp_path):
+        """uninstall 应拒绝外部 skill"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import uninstall_skill
+
+        result = uninstall_skill("external-skill", config, auto_confirm=True)
+        assert result is False
+
+    def test_uninstall_no_custom_skills(self, tmp_path):
+        """没有自定义 skill 时 uninstall 应正常退出"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import uninstall_skill
+
+        result = uninstall_skill(None, config, auto_confirm=True)
+        assert result is True
+
+
+class TestSymlinkIsolation:
+    """测试外部 skill 隔离（bad case: sync 误删外部 skill symlink）"""
+
+    def test_sync_does_not_touch_external_skills(self, tmp_path):
+        """sync 应跳过 lock 文件中的外部 skill，不创建 symlink"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+        from sync_skills.symlink import sync_all_links
+        from sync_skills.classification import get_external_skills
+
+        # 添加自定义 skill
+        add_skill("custom-skill", config)
+
+        # 在 agents_dir 创建外部 skill（真实目录，模拟 npx skills 安装）
+        ext_dir = agents_dir / "ext-from-npm"
+        ext_dir.mkdir()
+        (ext_dir / "SKILL.md").write_text("---\nname: ext-from-npm\n---\n")
+
+        # 同步
+        external = get_external_skills(config.external.global_lock, config.external.local_lock)
+        states = sync_all_links(
+            config.agents_dir, config.repo_skills_dir,
+            config.effective_agent_dirs, external_skills=external,
+        )
+
+        # 只应管理 custom-skill，不包含 ext-from-npm
+        names = [s.name for s in states]
+        assert "custom-skill" in names
+        assert "ext-from-npm" not in names
+
+        # 外部 skill 应保持为真实目录
+        assert ext_dir.is_dir()
+        assert not ext_dir.is_symlink()
+
+    def test_add_does_not_overwrite_external_skill(self, tmp_path):
+        """add 不应覆盖 agents_dir 中已存在的外部 skill"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        # 在 agents_dir 创建外部 skill
+        ext_dir = agents_dir / "ext-skill"
+        ext_dir.mkdir()
+        (ext_dir / "SKILL.md").write_text("---\nname: ext\n---\n")
+
+        result = add_skill("ext-skill", config)
+        assert result is False
+        # 外部 skill 应保持为真实目录
+        assert ext_dir.is_dir()
+        assert not ext_dir.is_symlink()
+
+
+class TestPushCommand:
+    """测试 sync-skills push 命令"""
+
+    def test_push_commits_and_shows_branch_info(self, tmp_path, capsys, monkeypatch):
+        """push 应 commit 并显示分支信息让用户确认"""
+        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+        from sync_skills.git_ops import git_init
+        from sync_skills.cli import cmd_push
+        import argparse
+
+        git_init(repo)
+        add_skill("my-skill", config)
+
+        # mock input 模拟用户取消推送
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+
+        args = argparse.Namespace(message="test", config=None)
+        cmd_push(args)
+        captured = capsys.readouterr()
+
+        # 应显示分支信息
+        assert "分支" in captured.out
+        # 用户取消
+        assert "已取消" in captured.out
