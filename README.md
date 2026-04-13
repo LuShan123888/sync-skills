@@ -129,11 +129,11 @@ sync-skills add my-skill
 # 删除 Skill（彻底删除）/ Remove a custom skill permanently
 sync-skills remove my-skill
 
-# 卸载 Skill（还原文件）/ Uninstall a custom skill (restore files)
-sync-skills uninstall my-skill
+# 卸载 Skill（移除管理，还原文件）/ Unlink a custom skill (restore files)
+sync-skills unlink my-skill
 
 # 卸载所有自定义 Skill / Uninstall all custom skills
-sync-skills uninstall -y
+sync-skills unlink --all -y
 ```
 
 ---
@@ -182,7 +182,7 @@ sync-skills uninstall -y
 9. **info** -- 显示 Skill 详情（含外部/自定义分类）
 10. **add** -- 在 `~/Skills/skills/` 中创建 Skill 骨架，建立 symlink（手动创建时使用）
 11. **remove** -- 彻底删除 Skill（git 仓库中的文件 + 所有 symlink）
-12. **uninstall** -- 卸载 Skill（还原文件到统一 Skill 目录，保留数据）
+12. **unlink** -- 移除 Skill 管理（还原文件到统一 Skill 目录，保留数据）
 
 ---
 
@@ -195,7 +195,7 @@ sync-skills uninstall -y
 | **版本控制** | 无，换设备就丢失 | git 仓库，天然支持版本管理和多设备同步 |
 | **新建 Skill** | 手动创建目录、写文件、建 N 条链接 | `sync-skills add` 一条命令完成 |
 | **删除 Skill** | 手动删文件、清除断链 | `sync-skills remove` 自动清理 |
-| **卸载 Skill** | 手动还原文件、删除链接 | `sync-skills uninstall` 还原文件到统一 Skill 目录 |
+| **卸载 Skill** | 手动还原文件、删除链接 | `sync-skills unlink` 还原文件到统一 Skill 目录 |
 | **多设备同步** | 不支持 | `push` / `pull` 一键同步 |
 | **维护成本** | 每次变更手动操作 | 自动化，零维护 |
 
@@ -228,7 +228,7 @@ sync-skills uninstall -y
 | `sync-skills info <name>` | 显示 Skill 详情（含外部/自定义分类） |
 | `sync-skills add <name>` | 创建新的自定义 Skill（手动创建骨架，-d/-t 参数） |
 | `sync-skills remove <name>` | 彻底删除自定义 Skill（-y 跳过确认） |
-| `sync-skills uninstall [name]` | 卸载自定义 Skill，还原文件（省略 name 则卸载全部，-y 跳过确认） |
+| `sync-skills unlink [name]` | 移除 Skill 管理，还原文件（省略 name 或 --all 则移除全部，-y 跳过确认） |
 
 ### 通用选项
 
@@ -265,6 +265,7 @@ sync-skills uninstall -y
 ```toml
 repo = "~/Skills"
 agents_dir = "~/.agents/skills"
+state_file = "~/.config/sync-skills/skills.json"
 
 [external]
 global_lock = "~/.agents/.skill-lock.json"
@@ -273,6 +274,7 @@ local_lock = "~/skills-lock.json"
 
 - `repo` -- 自定义 Skill 的 git 仓库路径
 - `agents_dir` -- 统一 Skill 目录路径
+- `state_file` -- 状态文件路径（记录已管理的 skill）
 - `external.global_lock` -- 外部 Skill 的全局锁文件（npx skills 使用）
 - `external.local_lock` -- 外部 Skill 的本地锁文件
 
@@ -282,7 +284,7 @@ local_lock = "~/skills-lock.json"
 
 - **外部 Skill 隔离** -- 通过 lock 文件自动识别外部 Skill，所有 symlink 操作跳过外部 Skill，永不触碰
 - **Git 命令预览** -- `push` 和 `pull` 执行前展示完整 git 命令，用户确认后才执行
-- **操作前后验证** -- `add`/`remove`/`uninstall` 后自动验证状态；`pull` 前检查状态，有异常则警告
+- **操作前后验证** -- `add`/`remove`/`unlink` 后自动验证状态；`pull` 前检查状态，有异常则警告
 - **Symlink 验证** -- `fix` 检查所有 symlink，修复断裂链接
 - **断链检测** -- `fix` 和 `status` 自动检测远程删除导致的断链 symlink，提示用户清理
 - **缺失检测** -- `fix` 自动检测缺少统一 Skill 目录 symlink 的自定义 skill，提示用户创建
@@ -419,10 +421,10 @@ sync-skills add my-skill
 sync-skills remove my-skill
 
 # Uninstall a custom skill (restore files to unified directory)
-sync-skills uninstall my-skill
+sync-skills unlink my-skill
 
 # Uninstall all custom skills
-sync-skills uninstall -y
+sync-skills unlink --all -y
 ```
 
 ## Architecture
@@ -447,7 +449,7 @@ sync-skills uninstall -y
 9. **info** -- Show skill details (with external/custom classification)
 10. **add** -- Create skill skeleton in `~/Skills/skills/`, create symlinks (for manual creation)
 11. **remove** -- Permanently delete skill (files in git repo + all symlinks)
-12. **uninstall** -- Uninstall skill (restore files to unified Skill directory, preserve data)
+12. **unlink** -- Unlink skill from management (restore files to unified Skill directory, preserve data)
 
 ## Comparison
 
@@ -458,7 +460,7 @@ sync-skills uninstall -y
 | **Version control** | None; lost on device switch | Git repo; natural versioning and multi-device sync |
 | **New skill** | Manual: create dir, write file, create N symlinks | `sync-skills add` does it all |
 | **Deletion** | Manual: delete files, clean broken links | `sync-skills remove` auto-cleans |
-| **Uninstall** | Manual: restore files, delete links | `sync-skills uninstall` restores to unified directory |
+| **Uninstall** | Manual: restore files, delete links | `sync-skills unlink` restores to unified directory |
 | **Multi-device sync** | Not supported | `push` / `pull` one command |
 | **Maintenance** | Manual for every change | Automated, zero maintenance |
 
@@ -489,7 +491,7 @@ sync-skills uninstall -y
 | `sync-skills info <name>` | Show skill details (with external/custom classification) |
 | `sync-skills add <name>` | Create a new custom skill (from template, -d/-t flags) |
 | `sync-skills remove <name>` | Permanently remove a custom skill (-y to skip confirmation) |
-| `sync-skills uninstall [name]` | Uninstall custom skill, restore files (omit name to uninstall all, -y to skip confirmation) |
+| `sync-skills unlink [name]` | Unlink custom skill, restore files (omit name or --all to unlink all, -y to skip confirmation) |
 
 ### General Options
 
@@ -524,6 +526,7 @@ Config file at `~/.config/sync-skills/config.toml`:
 ```toml
 repo = "~/Skills"
 agents_dir = "~/.agents/skills"
+state_file = "~/.config/sync-skills/skills.json"
 
 [external]
 global_lock = "~/.agents/.skill-lock.json"
@@ -532,6 +535,7 @@ local_lock = "~/skills-lock.json"
 
 - `repo` -- Git repo path for custom skills
 - `agents_dir` -- Unified Skill directory path
+- `state_file` -- State file path (tracks managed skills)
 - `external.global_lock` -- Global lock file for external skills (used by npx skills)
 - `external.local_lock` -- Local lock file for external skills
 

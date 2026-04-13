@@ -251,36 +251,32 @@ def sync_all_links(
     repo_skills_dir: Path,
     agent_dirs: list[Path],
     external_skills: set[str] | None = None,
+    managed_skills: set[str] | None = None,
 ) -> list[LinkState]:
-    """扫描自定义 Skill 仓库中所有 skill，验证/修复 symlink。
+    """验证/修复所有已管理 skill 的 symlink。
 
+    遍历 managed_skills（状态文件）而非扫描 repo 目录。
     跳过 external_skills 中的外部 skill（由 npx skills 管理）。
     """
     external = external_skills or set()
+    managed = managed_skills or set()
     states = []
 
-    if not repo_skills_dir.is_dir():
-        return states
-
-    for d in sorted(repo_skills_dir.iterdir()):
-        if d.name.startswith(".") or not d.is_dir():
-            continue
-        if not (d / "SKILL.md").is_file():
-            continue
-        if d.name in external:
+    for name in sorted(managed):
+        if name in external:
             continue  # 跳过外部 skill
 
-        state = verify_links(d.name, agents_dir, repo_skills_dir, agent_dirs)
+        state = verify_links(name, agents_dir, repo_skills_dir, agent_dirs)
 
         # 修复统一 Skill 目录
         if not state.agents_link_valid and not state.agents_link_wrong_target:
-            if create_agents_link(d.name, agents_dir, repo_skills_dir):
+            if create_agents_link(name, agents_dir, repo_skills_dir):
                 state.agents_link_exists = True
                 state.agents_link_valid = True
 
         # 修复 Agent Skill 目录（补充缺失的）
         if state.agent_links_missing:
-            results = create_agent_links(d.name, agents_dir, agent_dirs)
+            results = create_agent_links(name, agents_dir, agent_dirs)
             state.agent_links_ok = [a for a, ok in results.items() if ok]
             state.agent_links_missing = [a for a, ok in results.items() if not ok]
 

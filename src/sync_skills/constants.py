@@ -64,3 +64,4 @@ KNOWN_TOOLS = [
 
 CONFIG_DIR = Path.home() / ".config" / "sync-skills"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
+STATE_FILE = CONFIG_DIR / "skills.json"

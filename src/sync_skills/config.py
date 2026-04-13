@@ -15,6 +15,7 @@ from .constants import (
     DEFAULT_SOURCE,
     DEFAULT_TARGETS,
     KNOWN_TOOLS,
+    STATE_FILE,
 )
 
 
@@ -43,6 +44,7 @@ class Config:
     agents_dir: Path = field(default_factory=lambda: DEFAULT_AGENTS_DIR)
     agent_dirs: list[Path] | None = None  # None = 使用内置默认值
     external: ExternalConfig = field(default_factory=ExternalConfig)
+    state_file: Path = field(default_factory=lambda: STATE_FILE)
 
     # 旧版兼容字段（仅 --copy 模式）
     source: Path | None = None
@@ -55,6 +57,7 @@ class Config:
             repo=DEFAULT_REPO,
             agents_dir=DEFAULT_AGENTS_DIR,
             external=ExternalConfig(),
+            state_file=STATE_FILE,
             source=DEFAULT_SOURCE,
             targets=[Target(name="builtin", path=p) for p in DEFAULT_TARGETS],
         )
@@ -119,6 +122,10 @@ def load_config(config_path: Path | None = None) -> Config:
     if agents_dir_raw:
         config.agents_dir = _expand_home(agents_dir_raw)
 
+    state_file_raw = data.get("state_file", "")
+    if state_file_raw:
+        config.state_file = _expand_home(state_file_raw)
+
     # agent_dirs（选中的 Agent 目录列表）
     agent_dirs_raw = data.get("agent_dirs")
     if agent_dirs_raw is not None:
@@ -168,6 +175,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     lines = [
         f'repo = "{_unexpand_home(config.repo)}"',
         f'agents_dir = "{_unexpand_home(config.agents_dir)}"',
+        f'state_file = "{_unexpand_home(config.state_file)}"',
     ]
 
     # agent_dirs（选中的 Agent 目录列表）

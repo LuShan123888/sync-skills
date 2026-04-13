@@ -1,7 +1,7 @@
 """自定义 skill vs 外部 skill 分类判定
 
-通过 lock 文件（~/.agents/.skill-lock.json 和 ~/skills-lock.json）
-识别哪些 skill 由 npx skills 管理（外部），哪些是用户自创建的（自定义）。
+通过状态文件（~/.config/sync-skills/skills.json）识别哪些 skill 由 sync-skills 管理（自定义/已管理），
+通过 lock 文件（~/.agents/.skill-lock.json 和 ~/skills-lock.json）识别哪些 skill 由 npx skills 管理（外部）。
 """
 
 import json
@@ -27,6 +27,8 @@ class SkillClass:
     lock_source: str | None = None
     # 是否有 ~/.agents/skills/<name> → ~/Skills/skills/<name> 软链接
     has_custom_link: bool = False
+    # 是否在状态文件中（已纳入管理）
+    managed: bool = False
 
 
 # ============================================================
@@ -103,20 +105,22 @@ def _get_source_from_lock(name: str, path: Path) -> str | None:
 def classify_skill(
     name: str,
     agents_dir: Path,
-    repo_skills_dir: Path,
+    managed_skills: set[str],
     external_skills: set[str],
+    repo_skills_dir: Path | None = None,
 ) -> SkillClass:
     """判断单个 skill 的分类。
 
-    判定逻辑：
+    判定逻辑（基于状态文件）：
     1. 在 lock 文件中 → 外部 skill（npx skills 管理）
-    2. 不在 lock 中 + 在 repo_skills_dir → 自定义 skill
-    3. 不在 lock 中 + 不在 repo_skills_dir + 在 agents_dir → 孤儿
+    2. 在状态文件中（managed_skills）→ 自定义 skill（sync-skills 管理）
+    3. 在 agents_dir 中为真实目录 → 孤儿
     4. 都不在 → 不存在（返回 orphan）
     """
     in_external = name in external_skills
+    in_managed = name in managed_skills
     in_agents = (agents_dir / name).is_dir()
-    in_repo = (repo_skills_dir / name).is_dir()
+    in_repo = repo_skills_dir is not None and (repo_skills_dir / name).is_dir()
 
     if in_external:
         return SkillClass(
@@ -125,25 +129,21 @@ def classify_skill(
             agents_path=agents_dir / name if in_agents else None,
         )
 
-    if in_repo and in_agents:
+    if in_managed:
         agents_link = agents_dir / name
-        has_link = agents_link.is_symlink() and _resolve_target(agents_link) == repo_skills_dir / name
+        has_link = False
+        if repo_skills_dir is not None and agents_link.is_symlink():
+            has_link = _resolve_target(agents_link) == (repo_skills_dir / name).resolve()
         return SkillClass(
             name=name,
             skill_type="custom",
-            custom_path=repo_skills_dir / name,
-            agents_path=agents_dir / name,
+            custom_path=(repo_skills_dir / name) if in_repo else None,
+            agents_path=agents_dir / name if in_agents else None,
             has_custom_link=has_link,
+            managed=True,
         )
 
-    if in_repo and not in_agents:
-        return SkillClass(
-            name=name,
-            skill_type="custom",
-            custom_path=repo_skills_dir / name,
-        )
-
-    if in_agents and not in_repo:
+    if in_agents:
         return SkillClass(
             name=name,
             skill_type="orphan",
@@ -155,10 +155,15 @@ def classify_skill(
 
 def classify_all_skills(
     agents_dir: Path,
-    repo_skills_dir: Path,
+    managed_skills: set[str],
     external_skills: set[str],
+    repo_skills_dir: Path | None = None,
 ) -> list[SkillClass]:
-    """扫描所有目录，对每个 skill 进行分类。"""
+    """扫描所有目录，对每个 skill 进行分类。
+
+    扫描来源：agents_dir + repo_skills_dir（如果提供）。
+    分类依据：状态文件 + 外部 lock 文件。
+    """
     all_names: set[str] = set()
 
     # 扫描 ~/.agents/skills/
@@ -170,15 +175,18 @@ def classify_all_skills(
                 all_names.add(d.name)
 
     # 扫描 ~/Skills/skills/
-    if repo_skills_dir.is_dir():
+    if repo_skills_dir is not None and repo_skills_dir.is_dir():
         for d in repo_skills_dir.iterdir():
             if d.name.startswith(".") or not d.is_dir():
                 continue
             if (d / "SKILL.md").is_file():
                 all_names.add(d.name)
 
+    # 也加入状态文件中的 skill（可能 symlink 全断了，文件系统中不存在）
+    all_names.update(managed_skills)
+
     return sorted(
-        [classify_skill(name, agents_dir, repo_skills_dir, external_skills) for name in all_names],
+        [classify_skill(name, agents_dir, managed_skills, external_skills, repo_skills_dir) for name in all_names],
         key=lambda c: (c.skill_type, c.name),
     )
 

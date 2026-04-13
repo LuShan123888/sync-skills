@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """sync-skills: 自定义 Skill 生命周期管理器
 
-v1.0 — 基于 git + symlink 管理用户自创建的 skill。
+v1.0 — 基于 git + symlink + 状态文件管理用户自创建的 skill。
 外部 skill（由 npx skills 管理）不受影响。
 
 命令：
-  sync-skills              显示帮助
-  sync-skills init          初始化 ~/Skills/ 仓库
-  sync-skills add <name>    创建新 skill
-  sync-skills remove <name> 删除自定义 skill
-  sync-skills fix           验证/修复软链接
-  sync-skills list          列出自定义 skill
-  sync-skills status        显示 git 状态
-  sync-skills push          git commit + push（展示完整命令后确认）
-  sync-skills pull          git pull + 修复软链接（展示完整命令后确认）
+  sync-skills init           初始化 ~/Skills/ 仓库
+  sync-skills link <name>    纳入野生 skill（--all 全部纳入）
+  sync-skills unlink <name>  从管理中移除（--all 全部移除）
+  sync-skills add <name>     创建新 skill
+  sync-skills remove <name>  删除自定义 skill（支持多个）
+  sync-skills fix            验证/修复异常状态
+  sync-skills list           列出已管理 skill
+  sync-skills status         显示 git 状态 + 管理状态
+  sync-skills push           git commit + push
+  sync-skills pull           git pull + 修复软链接
+  sync-skills search <query> 搜索已管理 skill
+  sync-skills info <name>    显示 skill 详情
 
 旧版模式（copy）：
   sync-skills --copy       使用旧版 copy 同步逻辑
@@ -27,7 +30,8 @@ from . import __version__
 from .classification import classify_all_skills, get_external_skills
 from .config import Config, _unexpand_home, load_config, save_config
 from .git_ops import git_add_commit, git_is_repo, git_pull, git_push, git_status
-from .lifecycle import add_skill, detect_wild_skills, init_repo, link_skill, remove_skill, uninstall_skill
+from .lifecycle import add_skill, detect_wild_skills, init_repo, link_skill, remove_skill, unlink_skill
+from .state import get_managed_skills
 from .symlink import create_all_links, create_agents_link, sync_all_links
 
 # ============================================================
@@ -98,70 +102,105 @@ def _load_config_or_default(args) -> Config:
     return load_config(args.config)
 
 
+def _get_dry_run(args) -> bool:
+    """获取 dry-run 标志。"""
+    return getattr(args, "dry_run", False)
+
+
 def cmd_init(args):
     """初始化 ~/Skills/ 仓库。"""
     config = _load_config_or_default(args)
-    init_repo(config)
+    init_repo(config, auto_confirm=args.yes, dry_run=_get_dry_run(args))
 
 
 def cmd_add(args):
     """创建新自定义 skill。"""
     config = _load_config_or_default(args)
     tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
-    if add_skill(args.name, config, description=args.description or "", tags=tags):
+    if add_skill(args.name, config, description=args.description or "", tags=tags, dry_run=_get_dry_run(args)):
         _verify_after_change(config)
 
 
 def cmd_remove(args):
-    """删除自定义 skill。"""
+    """删除自定义 skill（支持多个）。"""
     config = _load_config_or_default(args)
-    if remove_skill(args.name, config, auto_confirm=args.yes):
-        _verify_after_change(config)
+    names = args.names if isinstance(args.names, list) else [args.names]
+    success = True
+    for name in names:
+        if not remove_skill(name, config, auto_confirm=args.yes, dry_run=_get_dry_run(args)):
+            success = False
+        else:
+            _verify_after_change(config)
+    return success
 
 
-def cmd_uninstall(args):
-    """卸载自定义 skill，还原文件到统一 Skill 目录。"""
+def cmd_unlink(args):
+    """从管理中移除 skill（支持多个，--all 全部移除）。"""
     config = _load_config_or_default(args)
-    if uninstall_skill(getattr(args, "name", None), config, auto_confirm=args.yes):
+    names = args.names if args.names else None
+    if unlink_skill(names, config, auto_confirm=args.yes, dry_run=_get_dry_run(args)):
         _verify_after_change(config)
 
 
 def cmd_link(args):
-    """将野生 skill 纳入管理。"""
+    """将野生 skill 纳入管理（支持多个，--all 全部纳入）。"""
     config = _load_config_or_default(args)
-    if args.name:
-        if link_skill(args.name, config, auto_confirm=args.yes):
-            _verify_after_change(config)
-    else:
+
+    if args.all:
+        # link all wild skills
         wild = detect_wild_skills(config)
         if not wild:
             print("没有发现野生 skill")
             return
-        print(f"发现 {len(wild)} 个野生 skill:\n")
+        success = True
         for item in wild:
-            print(f"  {item['name']}")
-            for src in item['sources']:
-                print(f"      {_unexpand_home(src)}")
-        print(f"\n使用 'sync-skills link <name> -y' 纳入管理")
+            if not link_skill(item["name"], config, auto_confirm=args.yes, dry_run=_get_dry_run(args)):
+                success = False
+            else:
+                _verify_after_change(config)
+        return
+
+    if args.names:
+        # link specific skills
+        success = True
+        for name in args.names:
+            if not link_skill(name, config, auto_confirm=args.yes, dry_run=_get_dry_run(args)):
+                success = False
+            else:
+                _verify_after_change(config)
+        return
+
+    # 无参数：列出野生 skill
+    wild = detect_wild_skills(config)
+    if not wild:
+        print("没有发现野生 skill")
+        return
+    print(f"发现 {len(wild)} 个野生 skill:\n")
+    for item in wild:
+        print(f"  {item['name']}")
+        for src in item['sources']:
+            print(f"      {_unexpand_home(src)}")
+    print(f"\n使用 'sync-skills link <name> -y' 纳入管理")
+    print(f"使用 'sync-skills link --all -y' 纳入全部")
 
 
 def cmd_list(args):
-    """列出自定义 skill。"""
+    """列出已管理 skill。"""
     config = _load_config_or_default(args)
-    repo_skills_dir = config.repo_skills_dir
     external = get_external_skills(config.external.global_lock, config.external.local_lock)
+    managed = get_managed_skills(config.state_file)
 
-    if not repo_skills_dir.is_dir():
-        print("没有找到自定义 skill 目录。请先运行 'sync-skills init'")
+    if not managed:
+        print("没有已管理的 skill")
         return
 
     # 收集所有 skill 分类
-    all_skills = classify_all_skills(config.agents_dir, repo_skills_dir, external)
+    all_skills = classify_all_skills(config.agents_dir, managed, external, config.repo_skills_dir)
 
-    custom = [s for s in all_skills if s.skill_type == "custom"]
+    custom = [s for s in all_skills if s.managed]
 
     if not custom:
-        print("没有自定义 skill")
+        print("没有已管理的 skill")
         return
 
     # 过滤 tags
@@ -177,7 +216,7 @@ def cmd_list(args):
                 filtered.append(s)
         custom = filtered
 
-    print(f"自定义 skill ({len(custom)} 个):\n")
+    print(f"已管理 skill ({len(custom)} 个):\n")
     for s in custom:
         link_status = "✓" if s.has_custom_link else "✗"
         print(f"  {link_status} {s.name}")
@@ -228,21 +267,22 @@ def cmd_status(args):
 
     # === Skill 管理状态 ===
     external = get_external_skills(config.external.global_lock, config.external.local_lock)
-    all_classifications = classify_all_skills(config.agents_dir, config.repo_skills_dir, external)
+    managed = get_managed_skills(config.state_file)
+    all_classifications = classify_all_skills(config.agents_dir, managed, external, config.repo_skills_dir)
 
-    custom = [c for c in all_classifications if c.skill_type == "custom"]
+    custom = [c for c in all_classifications if c.managed]
     orphans = [c for c in all_classifications if c.skill_type == "orphan"]
     external_skills = [c for c in all_classifications if c.skill_type == "external"]
 
     print(f"\n--- Skill 状态 ---")
-    print(f"已管理 (自定义): {len(custom)}")
+    print(f"已管理: {len(custom)}")
     if custom:
         for c in custom:
             link = "✓" if c.has_custom_link else "✗"
             print(f"  {link} {c.name}")
 
     if orphans:
-        print(f"可管理 (孤儿): {len(orphans)}")
+        print(f"未管理 (孤儿): {len(orphans)}")
         for o in orphans:
             print(f"  ? {o.name}")
 
@@ -253,8 +293,14 @@ def cmd_status(args):
     if broken:
         print(f"\n断链 symlink: {len(broken)}")
         for path in broken:
-            from .config import _unexpand_home
             print(f"  ✗ {_unexpand_home(path)}")
+
+    # === 状态文件一致性 ===
+    inconsistencies = _detect_state_inconsistencies(config, managed, external)
+    if inconsistencies:
+        print(f"\n状态不一致: {len(inconsistencies)}")
+        for item in inconsistencies:
+            print(f"  ! {item}")
 
 
 def cmd_push(args):
@@ -296,14 +342,19 @@ def cmd_push(args):
     else:
         print(f"\n[WARNING] 尚未配置远程仓库，将仅执行本地 commit")
 
-    try:
-        confirm = input("\n确认执行? [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\n已取消")
+    if _get_dry_run(args):
+        print("\n[DRY-RUN] 以上命令不会执行")
         return
-    if confirm != "y":
-        print("已取消")
-        return
+
+    if not args.yes:
+        try:
+            confirm = input("\n确认执行? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return
+        if confirm != "y":
+            print("已取消")
+            return
 
     # 执行 commit
     if git_add_commit(repo, message):
@@ -336,7 +387,7 @@ def cmd_pull(args):
 
     # Pull 前：检查 skill 管理状态
     state = _check_state(config)
-    has_issues = any([state["broken_links"], state["missing_links"], state["orphans"]])
+    has_issues = any([state["broken_links"], state["missing_links"], state["orphans"], state["inconsistencies"]])
     if has_issues:
         print("⚠ 当前 skill 管理状态存在异常:")
         if state["broken_links"]:
@@ -345,13 +396,16 @@ def cmd_pull(args):
             print(f"  - 缺失 symlink: {len(state['missing_links'])} 个")
         if state["orphans"]:
             print(f"  - 未被管理的 skill: {len(state['orphans'])} 个")
-        try:
-            confirm = input("\n建议先执行 sync-skills fix 修复异常。是否继续 pull? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("\n已取消")
-            return
-        if confirm != "y":
-            return
+        if state["inconsistencies"]:
+            print(f"  - 状态不一致: {len(state['inconsistencies'])} 个")
+        if not args.yes:
+            try:
+                confirm = input("\n建议先执行 sync-skills fix 修复异常。是否继续 pull? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n已取消")
+                return
+            if confirm != "y":
+                return
 
     # 展示将要执行的 git 命令
     from .git_ops import git_get_tracking_branch
@@ -370,14 +424,19 @@ def cmd_pull(args):
     else:
         print(f"\n[WARNING] 未设置追踪分支，将使用: {pull_cmd}")
 
-    try:
-        confirm = input("\n确认执行? [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\n已取消")
+    if _get_dry_run(args):
+        print("\n[DRY-RUN] 以上命令不会执行")
         return
-    if confirm != "y":
-        print("已取消")
-        return
+
+    if not args.yes:
+        try:
+            confirm = input("\n确认执行? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return
+        if confirm != "y":
+            print("已取消")
+            return
 
     success, msg = git_pull(repo)
     if not success:
@@ -387,25 +446,29 @@ def cmd_pull(args):
     print(f"[OK] {msg}")
 
     # Pull 后：修复软链接
-    _do_sync(config)
+    _do_sync(config, auto_confirm=args.yes)
 
 
-def cmd_check(args):
-    """验证/修复软链接。"""
+def cmd_fix(args):
+    """验证/修复软链接和状态一致性。"""
     config = _load_config_or_default(args)
-    _do_sync(config)
+    _do_sync(config, auto_confirm=args.yes)
 
 
-def _do_sync(config: Config):
-    """执行软链接同步。"""
+def _do_sync(config: Config, auto_confirm: bool = False):
+    """执行状态检查和修复。"""
     from .config import _unexpand_home
 
     external = get_external_skills(config.external.global_lock, config.external.local_lock)
+    managed = get_managed_skills(config.state_file)
+
+    # 1. 验证/修复已管理 skill 的 symlink
     states = sync_all_links(
         config.agents_dir,
         config.repo_skills_dir,
         config.effective_agent_dirs,
         external_skills=external,
+        managed_skills=managed,
     )
 
     created = 0
@@ -431,7 +494,7 @@ def _do_sync(config: Config):
         if issues:
             parts.append(f"! {issues} 需要关注")
 
-        print(f"自定义 skill ({total} 个): {'  '.join(parts)}")
+        print(f"已管理 skill ({total} 个): {'  '.join(parts)}")
 
         for s in states:
             if not s.agents_link_valid:
@@ -439,73 +502,81 @@ def _do_sync(config: Config):
             if s.agent_links_missing:
                 print(f"  ! {s.name}: Agent Skill 目录 symlink 缺失 ({', '.join(s.agent_links_missing)})")
     else:
-        print("没有找到自定义 skill")
+        print("没有已管理的 skill")
 
-    # 检测断链 symlink（自定义 Skill 仓库中已删除，但 Agent 目录残留）
+    # 2. 检测断链 symlink
     broken = _detect_broken_agent_links(config)
     if broken:
-        print(f"\n⚠ 检测到 {len(broken)} 个断链 symlink（自定义 Skill 仓库中已删除）:")
+        print(f"\n⚠ 检测到 {len(broken)} 个断链 symlink:")
         for path in broken:
             print(f"  - {_unexpand_home(path)}")
-        try:
-            confirm = input("是否清理? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("\n已跳过")
-            return
-        if confirm == "y":
+        if auto_confirm:
             for path in broken:
                 path.unlink()
             print(f"  [OK] 已清理 {len(broken)} 个断链 symlink")
+        else:
+            try:
+                confirm = input("是否清理? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n已跳过")
+                return
+            if confirm == "y":
+                for path in broken:
+                    path.unlink()
+                print(f"  [OK] 已清理 {len(broken)} 个断链 symlink")
 
-    # 检测缺失的统一 Skill 目录 symlink
-    missing = _detect_missing_agents_links(config, external)
-    if missing:
-        print(f"\n⚠ 检测到 {len(missing)} 个自定义 skill 缺少统一 Skill 目录 symlink:")
-        for name in missing:
-            print(f"  - {name} ({_unexpand_home(config.repo_skills_dir / name)})")
-        try:
-            confirm = input("是否创建? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("\n已跳过")
-            return
-        if confirm == "y":
-            from .symlink import create_agents_link
-            for name in missing:
-                create_agents_link(name, config.agents_dir, config.repo_skills_dir)
-            print(f"  [OK] 已创建 {len(missing)} 个 symlink")
+    # 3. 检测状态文件与实际不一致
+    inconsistencies = _detect_state_inconsistencies(config, managed, external)
+    if inconsistencies:
+        print(f"\n⚠ 检测到 {len(inconsistencies)} 个状态不一致:")
+        for item in inconsistencies:
+            print(f"  - {item}")
 
-    # 检测孤儿 skill（未被管理）
-    orphans = _detect_orphan_skills(config, external)
+    # 4. 检测孤儿 skill（未被管理）
+    orphans = _detect_orphan_skills(config, external, managed)
     if orphans:
         print(f"\n⚠ 检测到 {len(orphans)} 个未被管理的 skill:")
         for name in orphans:
             print(f"  - {name}")
-        try:
-            confirm = input("是否纳入管理（迁移到自定义 Skill 仓库）? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("\n已跳过")
-            return
-        if confirm == "y":
-            import shutil
-            adopted = 0
-            for name in orphans:
-                source = config.agents_dir / name
-                target = config.repo_skills_dir / name
-                if source.is_dir() and not source.is_symlink():
-                    shutil.copytree(str(source), str(target))
-                    shutil.rmtree(source)
-                    create_all_links(name, config.agents_dir, config.repo_skills_dir,
-                                     config.effective_agent_dirs, external_skills=external)
-                    adopted += 1
-                    print(f"  [OK] {name}: 已迁移到 {_unexpand_home(target)}")
-                elif source.is_symlink():
-                    create_agents_link(name, config.agents_dir, config.repo_skills_dir)
-                    create_all_links(name, config.agents_dir, config.repo_skills_dir,
-                                     config.effective_agent_dirs, external_skills=external)
-                    adopted += 1
-                    print(f"  [OK] {name}: 已重建 symlink")
-            if adopted:
-                print(f"\n  已纳入 {adopted}/{len(orphans)} 个 skill")
+        if auto_confirm:
+            _adopt_orphans(config, orphans, external, managed)
+        else:
+            try:
+                confirm = input("是否纳入管理（迁移到自定义 Skill 仓库）? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n已跳过")
+                return
+            if confirm == "y":
+                _adopt_orphans(config, orphans, external, managed)
+
+
+def _adopt_orphans(config: Config, orphans: list[str], external: set[str], managed: set[str]):
+    """纳入孤儿 skill 到管理中。"""
+    import shutil
+    from .config import _unexpand_home
+    from .state import add_managed
+
+    adopted = 0
+    for name in orphans:
+        source = config.agents_dir / name
+        target = config.repo_skills_dir / name
+        if source.is_dir() and not source.is_symlink():
+            shutil.copytree(str(source), str(target))
+            shutil.rmtree(source)
+            create_all_links(name, config.agents_dir, config.repo_skills_dir,
+                             config.effective_agent_dirs, external_skills=external)
+            add_managed(name, config.state_file)
+            adopted += 1
+            print(f"  [OK] {name}: 已迁移到 {_unexpand_home(target)}")
+        elif source.is_symlink():
+            create_agents_link(name, config.agents_dir, config.repo_skills_dir)
+            create_all_links(name, config.agents_dir, config.repo_skills_dir,
+                             config.effective_agent_dirs, external_skills=external)
+            add_managed(name, config.state_file)
+            adopted += 1
+            print(f"  [OK] {name}: 已重建 symlink")
+    if adopted:
+        print(f"\n  已纳入 {adopted}/{len(orphans)} 个 skill")
 
 
 def _detect_broken_agent_links(config: Config) -> list[Path]:
@@ -530,39 +601,54 @@ def _detect_broken_agent_links(config: Config) -> list[Path]:
     return broken
 
 
-def _detect_missing_agents_links(config: Config, external_skills: set[str]) -> list[str]:
-    """检测自定义 Skill 仓库中缺少统一 Skill 目录 symlink 的 skill。"""
+def _detect_missing_agents_links(config: Config, external_skills: set[str], managed_skills: set[str]) -> list[str]:
+    """检测已管理 skill 中缺少统一 Skill 目录 symlink 的 skill。"""
     missing = []
     agents_dir = config.agents_dir
     repo_skills_dir = config.repo_skills_dir
-    if not repo_skills_dir.is_dir():
-        return missing
-    for d in repo_skills_dir.iterdir():
-        if d.name.startswith(".") or not d.is_dir():
+    for name in managed_skills:
+        if name in external_skills:
             continue
-        if not (d / "SKILL.md").is_file():
+        # 如果 repo 中没有文件，跳过（可能是远程删除了）
+        if not (repo_skills_dir / name).is_dir():
             continue
-        if d.name in external_skills:
-            continue
-        link = agents_dir / d.name
+        link = agents_dir / name
         if not link.exists() and not link.is_symlink():
-            missing.append(d.name)
+            missing.append(name)
     return missing
 
 
-def _detect_orphan_skills(config: Config, external_skills: set[str]) -> list[str]:
-    """检测未被管理的 skill（在统一 Skill 目录中但不在仓库中且不是外部 skill）。"""
-    all_classifications = classify_all_skills(config.agents_dir, config.repo_skills_dir, external_skills)
+def _detect_orphan_skills(config: Config, external_skills: set[str], managed_skills: set[str]) -> list[str]:
+    """检测未被管理的 skill（在统一 Skill 目录中但不在状态文件中且不是外部 skill）。"""
+    all_classifications = classify_all_skills(config.agents_dir, managed_skills, external_skills, config.repo_skills_dir)
     return [c.name for c in all_classifications if c.skill_type == "orphan"]
+
+
+def _detect_state_inconsistencies(config: Config, managed_skills: set[str], external_skills: set[str]) -> list[str]:
+    """检测状态文件与实际文件系统的不一致。"""
+    issues = []
+    repo_skills_dir = config.repo_skills_dir
+
+    for name in managed_skills:
+        if name in external_skills:
+            issues.append(f"{name}: 已管理但同时是外部 skill（冲突）")
+            continue
+        # 状态文件中有记录但 repo 中没有文件
+        if not (repo_skills_dir / name).is_dir():
+            issues.append(f"{name}: 已管理但仓库中无文件（可能需要 sync-skills pull）")
+
+    return issues
 
 
 def _check_state(config: Config) -> dict:
     """非交互式检查 skill 管理状态，返回各类异常。"""
     external = get_external_skills(config.external.global_lock, config.external.local_lock)
+    managed = get_managed_skills(config.state_file)
     return {
         "broken_links": _detect_broken_agent_links(config),
-        "missing_links": _detect_missing_agents_links(config, external),
-        "orphans": _detect_orphan_skills(config, external),
+        "missing_links": _detect_missing_agents_links(config, external, managed),
+        "orphans": _detect_orphan_skills(config, external, managed),
+        "inconsistencies": _detect_state_inconsistencies(config, managed, external),
     }
 
 
@@ -576,6 +662,8 @@ def _verify_after_change(config: Config):
         issues.append(f"缺失 symlink: {len(state['missing_links'])} 个")
     if state["orphans"]:
         issues.append(f"未被管理的 skill: {len(state['orphans'])} 个")
+    if state["inconsistencies"]:
+        issues.append(f"状态不一致: {len(state['inconsistencies'])} 个")
     if issues:
         print(f"\n⚠ 检测到异常:")
         for issue in issues:
@@ -584,23 +672,27 @@ def _verify_after_change(config: Config):
 
 
 def cmd_search(args):
-    """搜索自定义 skill。"""
+    """搜索已管理 skill。"""
     config = _load_config_or_default(args)
+    managed = get_managed_skills(config.state_file)
     repo_skills_dir = config.repo_skills_dir
 
-    if not repo_skills_dir.is_dir():
-        print("没有找到自定义 skill 目录")
+    if not managed:
+        print("没有已管理的 skill")
         return
 
     from .metadata import search_skills
     results = search_skills(repo_skills_dir, args.query)
 
-    if not results:
-        print(f"没有找到匹配 '{args.query}' 的 skill")
+    # 只显示已管理的 skill
+    managed_results = [(s, m) for s, m in results if s.name in managed]
+
+    if not managed_results:
+        print(f"没有找到匹配 '{args.query}' 的已管理 skill")
         return
 
-    print(f"找到 {len(results)} 个结果:\n")
-    for skill, meta in results:
+    print(f"找到 {len(managed_results)} 个结果:\n")
+    for skill, meta in managed_results:
         print(f"  {skill.name}")
         if meta.description:
             print(f"    {meta.description[:80]}")
@@ -613,9 +705,10 @@ def cmd_info(args):
     config = _load_config_or_default(args)
     name = args.name
     external = get_external_skills(config.external.global_lock, config.external.local_lock)
+    managed = get_managed_skills(config.state_file)
 
     from .classification import classify_skill, get_lock_source
-    classification = classify_skill(name, config.agents_dir, config.repo_skills_dir, external)
+    classification = classify_skill(name, config.agents_dir, managed, external, config.repo_skills_dir)
 
     if classification.skill_type == "orphan" and not classification.agents_path:
         print(f"skill '{name}' 不存在")
@@ -628,7 +721,7 @@ def cmd_info(args):
         source = get_lock_source(name, config.external.global_lock, config.external.local_lock)
         print(f"来源: {source or '未知'}")
         print(f"管理: npx skills")
-    elif classification.skill_type == "custom":
+    elif classification.managed:
         if classification.custom_path:
             print(f"自定义 Skill 仓库: {classification.custom_path}")
         print(f"统一 Skill 目录: {'✓ 正常' if classification.has_custom_link else '✗ 缺失'}")
@@ -664,27 +757,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="sync-skills — 自定义 Skill 生命周期管理器 (v1.0)",
         epilog=(
             "examples:\n"
-            "  sync-skills                      verify/repair symlinks (default)\n"
-            "  sync-skills fix                  verify/repair symlinks\n"
             "  sync-skills init                 initialize ~/Skills/ repo\n"
-            "  sync-skills add my-skill         create new custom skill\n"
-            "  sync-skills remove my-skill      remove custom skill\n"
-            "  sync-skills uninstall my-skill   uninstall and restore files\n"
-            "  sync-skills list                 list custom skills\n"
-            "  sync-skills status               show git status\n"
-            "  sync-skills push -m 'update'     commit and push\n"
-            "  sync-skills pull                 pull and rebuild links\n"
-            "  sync-skills search 'review'      search custom skills\n"
-            "  sync-skills info my-skill        show skill details\n"
-            "  sync-skills --copy               legacy copy-based sync\n"
+            "  sync-skills link my-skill       link wild skill into management\n"
+            "  sync-skills link --all -y       link all wild skills\n"
+            "  sync-skills unlink my-skill     remove from management\n"
+            "  sync-skills unlink --all -y     unlink all managed skills\n"
+            "  sync-skills add my-skill        create new custom skill\n"
+            "  sync-skills remove a b          remove multiple skills\n"
+            "  sync-skills fix                 verify/repair symlinks\n"
+            "  sync-skills list                list managed skills\n"
+            "  sync-skills status              show git + management status\n"
+            "  sync-skills push -m 'update'    commit and push\n"
+            "  sync-skills pull                pull and rebuild links\n"
+            "  sync-skills search 'review'     search managed skills\n"
+            "  sync-skills info my-skill       show skill details\n"
+            "  sync-skills --copy              legacy copy-based sync\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--copy", action="store_true", help="use legacy copy-based sync mode")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("-y", "--yes", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", dest="dry_run", help="preview without executing")
+    parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
     parser.add_argument("-v", "--version", action="version", version=f"sync-skills {__version__}")
 
     subparsers = parser.add_subparsers(dest="command")
@@ -692,6 +787,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # init
     sub_init = subparsers.add_parser("init", help="initialize ~/Skills/ repo")
     sub_init.add_argument("--config", type=Path, default=None)
+    sub_init.add_argument("--dry-run", action="store_true", dest="dry_run")
+    sub_init.add_argument("-y", "--yes", action="store_true")
 
     # add
     sub_add = subparsers.add_parser("add", help="create new custom skill")
@@ -699,49 +796,62 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sub_add.add_argument("--description", "-d", default="", help="skill description")
     sub_add.add_argument("--tags", "-t", default="", help="comma-separated tags")
     sub_add.add_argument("--config", type=Path, default=None)
+    sub_add.add_argument("--dry-run", action="store_true", dest="dry_run")
+    sub_add.add_argument("-y", "--yes", action="store_true")
 
     # link
-    sub_link = subparsers.add_parser("link", help="link wild skill into management")
-    sub_link.add_argument("name", nargs="?", default=None, help="skill name (omit to list wild skills)")
+    sub_link = subparsers.add_parser("link", help="link wild skill(s) into management")
+    sub_link.add_argument("names", nargs="*", default=None, help="skill name(s) (omit to list, --all for all)")
+    sub_link.add_argument("--all", action="store_true", help="link all wild skills")
     sub_link.add_argument("--config", type=Path, default=None)
+    sub_link.add_argument("--dry-run", action="store_true", dest="dry_run")
     sub_link.add_argument("-y", "--yes", action="store_true")
 
+    # unlink
+    sub_unlink = subparsers.add_parser("unlink", help="unlink skill(s) from management")
+    sub_unlink.add_argument("names", nargs="*", default=None, help="skill name(s) (omit to unlink all)")
+    sub_unlink.add_argument("--all", action="store_true", help="unlink all managed skills")
+    sub_unlink.add_argument("--config", type=Path, default=None)
+    sub_unlink.add_argument("--dry-run", action="store_true", dest="dry_run")
+    sub_unlink.add_argument("-y", "--yes", action="store_true")
+
     # remove
-    sub_remove = subparsers.add_parser("remove", help="remove custom skill")
-    sub_remove.add_argument("name", help="skill name")
+    sub_remove = subparsers.add_parser("remove", help="remove custom skill(s)")
+    sub_remove.add_argument("names", nargs="+", help="skill name(s)")
     sub_remove.add_argument("--config", type=Path, default=None)
+    sub_remove.add_argument("--dry-run", action="store_true", dest="dry_run")
     sub_remove.add_argument("-y", "--yes", action="store_true")
 
-    # uninstall
-    sub_uninstall = subparsers.add_parser("uninstall", help="uninstall custom skill, restore files")
-    sub_uninstall.add_argument("name", nargs="?", default=None, help="skill name (omit to uninstall all)")
-    sub_uninstall.add_argument("--config", type=Path, default=None)
-    sub_uninstall.add_argument("-y", "--yes", action="store_true")
-
     # list
-    sub_list = subparsers.add_parser("list", help="list custom skills")
+    sub_list = subparsers.add_parser("list", help="list managed skills")
     sub_list.add_argument("--tags", type=str, default=None, help="filter by tags")
     sub_list.add_argument("--config", type=Path, default=None)
 
     # status
-    sub_status = subparsers.add_parser("status", help="show git status")
+    sub_status = subparsers.add_parser("status", help="show git + management status")
     sub_status.add_argument("--config", type=Path, default=None)
 
     # push
     sub_push = subparsers.add_parser("push", help="git commit and push")
     sub_push.add_argument("--message", "-m", default="", help="commit message")
     sub_push.add_argument("--config", type=Path, default=None)
+    sub_push.add_argument("--dry-run", action="store_true", dest="dry_run")
+    sub_push.add_argument("-y", "--yes", action="store_true")
 
     # pull
     sub_pull = subparsers.add_parser("pull", help="git pull and rebuild links")
     sub_pull.add_argument("--config", type=Path, default=None)
+    sub_pull.add_argument("--dry-run", action="store_true", dest="dry_run")
+    sub_pull.add_argument("-y", "--yes", action="store_true")
 
-    # sync
-    sub_fix = subparsers.add_parser("fix", help="verify/repair symlinks")
+    # fix
+    sub_fix = subparsers.add_parser("fix", help="verify/repair symlinks and state")
     sub_fix.add_argument("--config", type=Path, default=None)
+    sub_fix.add_argument("--dry-run", action="store_true", dest="dry_run")
+    sub_fix.add_argument("-y", "--yes", action="store_true")
 
     # search
-    sub_search = subparsers.add_parser("search", help="search custom skills")
+    sub_search = subparsers.add_parser("search", help="search managed skills")
     sub_search.add_argument("query", help="search query")
     sub_search.add_argument("--config", type=Path, default=None)
 
@@ -785,22 +895,22 @@ def main(argv: list[str] | None = None):
 
     # 无子命令 → 显示帮助
     if not args.command:
-        parser.print_help()
+        parse_args(["--help"])
         return
 
     # 命令分发
     commands = {
         "init": cmd_init,
         "link": cmd_link,
+        "unlink": cmd_unlink,
         "add": cmd_add,
         "remove": cmd_remove,
-        "uninstall": cmd_uninstall,
         "list": cmd_list,
         "status": cmd_status,
         "push": cmd_push,
         "pull": cmd_pull,
-        "fix": cmd_check,
-        "sync": cmd_check,  # 兼容旧名
+        "fix": cmd_fix,
+        "sync": cmd_fix,  # 兼容旧名
         "search": cmd_search,
         "info": cmd_info,
     }

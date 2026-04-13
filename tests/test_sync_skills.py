@@ -1593,8 +1593,9 @@ def _create_v1_env(tmp_path: Path):
     repo_skills = repo / "skills"
     agents_dir = tmp_path / ".agents" / "skills"
     agent_dirs = [tmp_path / ".claude" / "skills", tmp_path / ".codex" / "skills"]
+    state_file = tmp_path / "state" / "skills.json"
 
-    for d in [repo_skills, agents_dir] + agent_dirs:
+    for d in [repo_skills, agents_dir, state_file.parent] + agent_dirs:
         d.mkdir(parents=True)
 
     # 外部 skill lock 文件
@@ -1603,11 +1604,15 @@ def _create_v1_env(tmp_path: Path):
     global_lock.write_text('{"skills": {"external-skill": {"source": "npm"}}}')
     local_lock.write_text('{}')
 
+    # 空状态文件
+    state_file.write_text('{"skills": {}}')
+
     config = Config(
         repo=repo,
         agents_dir=agents_dir,
         agent_dirs=agent_dirs,
         external=ExternalConfig(global_lock=global_lock, local_lock=local_lock),
+        state_file=state_file,
     )
     return repo, repo_skills, agents_dir, agent_dirs, config
 
@@ -1733,16 +1738,16 @@ class TestRemoveCommand:
         assert result is False
 
 
-class TestUninstallCommand:
-    """测试 sync-skills uninstall 命令"""
+class TestUnlinkCommand:
+    """测试 sync-skills unlink 命令"""
 
-    def test_uninstall_restores_files(self, tmp_path):
-        """uninstall 应将文件还原到统一 Skill 目录"""
+    def test_unlink_restores_files(self, tmp_path):
+        """unlink 应将文件还原到统一 Skill 目录"""
         repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import add_skill, uninstall_skill
+        from sync_skills.lifecycle import add_skill, unlink_skill
 
         add_skill("my-skill", config)
-        result = uninstall_skill("my-skill", config, auto_confirm=True)
+        result = unlink_skill(["my-skill"], config, auto_confirm=True)
         assert result is True
 
         # repo 中不应存在
@@ -1751,13 +1756,13 @@ class TestUninstallCommand:
         assert (agents_dir / "my-skill" / "SKILL.md").is_file()
         assert not (agents_dir / "my-skill").is_symlink()
 
-    def test_uninstall_preserves_agent_symlinks(self, tmp_path):
-        """uninstall 应保留 Agent Skill 目录 symlink"""
+    def test_unlink_preserves_agent_symlinks(self, tmp_path):
+        """unlink 应保留 Agent Skill 目录 symlink"""
         repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import add_skill, uninstall_skill
+        from sync_skills.lifecycle import add_skill, unlink_skill
 
         add_skill("my-skill", config)
-        uninstall_skill("my-skill", config, auto_confirm=True)
+        unlink_skill(["my-skill"], config, auto_confirm=True)
 
         # Agent symlink 仍存在且有效
         for ad in agent_dirs:
@@ -1765,16 +1770,16 @@ class TestUninstallCommand:
             assert link.is_symlink()
             assert link.resolve().exists()
 
-    def test_uninstall_all(self, tmp_path):
-        """uninstall 不指定 name 时应卸载所有自定义 skill"""
+    def test_unlink_all(self, tmp_path):
+        """unlink --all 应移除所有已管理 skill"""
         repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import add_skill, uninstall_skill
+        from sync_skills.lifecycle import add_skill, unlink_skill
 
         add_skill("skill-a", config)
         add_skill("skill-b", config)
         add_skill("skill-c", config)
 
-        result = uninstall_skill(None, config, auto_confirm=True)
+        result = unlink_skill(["--all"], config, auto_confirm=True)
         assert result is True
 
         # repo 应为空
@@ -1784,20 +1789,20 @@ class TestUninstallCommand:
         assert (agents_dir / "skill-b" / "SKILL.md").is_file()
         assert (agents_dir / "skill-c" / "SKILL.md").is_file()
 
-    def test_uninstall_rejects_external(self, tmp_path):
-        """uninstall 应拒绝外部 skill"""
+    def test_unlink_rejects_external(self, tmp_path):
+        """unlink 应拒绝外部 skill"""
         repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import uninstall_skill
+        from sync_skills.lifecycle import unlink_skill
 
-        result = uninstall_skill("external-skill", config, auto_confirm=True)
+        result = unlink_skill(["external-skill"], config, auto_confirm=True)
         assert result is False
 
-    def test_uninstall_no_custom_skills(self, tmp_path):
-        """没有自定义 skill 时 uninstall 应正常退出"""
+    def test_unlink_no_managed_skills(self, tmp_path):
+        """没有已管理 skill 时 unlink --all 应正常退出"""
         repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import uninstall_skill
+        from sync_skills.lifecycle import unlink_skill
 
-        result = uninstall_skill(None, config, auto_confirm=True)
+        result = unlink_skill(["--all"], config, auto_confirm=True)
         assert result is True
 
 
@@ -1810,6 +1815,7 @@ class TestSymlinkIsolation:
         from sync_skills.lifecycle import add_skill
         from sync_skills.symlink import sync_all_links
         from sync_skills.classification import get_external_skills
+        from sync_skills.state import get_managed_skills
 
         # 添加自定义 skill
         add_skill("custom-skill", config)
@@ -1821,9 +1827,11 @@ class TestSymlinkIsolation:
 
         # 同步
         external = get_external_skills(config.external.global_lock, config.external.local_lock)
+        managed = get_managed_skills(config.state_file)
         states = sync_all_links(
             config.agents_dir, config.repo_skills_dir,
             config.effective_agent_dirs, external_skills=external,
+            managed_skills=managed,
         )
 
         # 只应管理 custom-skill，不包含 ext-from-npm
@@ -2013,7 +2021,7 @@ class TestPushCommand:
         # mock input 模拟用户取消推送
         monkeypatch.setattr("builtins.input", lambda _: "n")
 
-        args = argparse.Namespace(message="test", config=None)
+        args = argparse.Namespace(message="test", config=None, dry_run=False, yes=False)
         cmd_push(args)
         captured = capsys.readouterr()
 
@@ -2074,12 +2082,12 @@ class TestFixCommand:
 
     def _make_args(self, config_path):
         import argparse
-        return argparse.Namespace(config=config_path)
+        return argparse.Namespace(config=config_path, dry_run=False, yes=False)
 
     def test_fix_detects_broken_links(self, tmp_path, capsys, monkeypatch):
         """fix 应检测断链 symlink（一级链路：agent dir → agents dir）"""
         repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import cmd_check
+        from sync_skills.cli import cmd_fix
         from sync_skills.config import save_config
 
         config_path = tmp_path / "config.toml"
@@ -2090,14 +2098,14 @@ class TestFixCommand:
         os.symlink(agents_dir / "nonexistent-skill", agent_dirs[0] / "nonexistent-skill")
 
         monkeypatch.setattr("builtins.input", lambda _: "n")
-        cmd_check(self._make_args(config_path))
+        cmd_fix(self._make_args(config_path))
         captured = capsys.readouterr()
         assert "断链" in captured.out
 
     def test_fix_detects_missing_agents_links(self, tmp_path, capsys, monkeypatch):
         """fix 应检测缺失的统一 Skill 目录 symlink"""
         repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import cmd_check
+        from sync_skills.cli import cmd_fix
         from sync_skills.lifecycle import add_skill
         from sync_skills.config import save_config
 
@@ -2111,7 +2119,7 @@ class TestFixCommand:
             agents_link.unlink()
 
         monkeypatch.setattr("builtins.input", lambda _: "y")
-        cmd_check(self._make_args(config_path))
+        cmd_fix(self._make_args(config_path))
         captured = capsys.readouterr()
         # 应检测到缺失并修复
         assert (agents_dir / "test-skill").is_symlink()
@@ -2119,7 +2127,7 @@ class TestFixCommand:
     def test_fix_detects_orphan_skills(self, tmp_path, capsys, monkeypatch):
         """fix 应检测孤儿 skill"""
         repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import cmd_check
+        from sync_skills.cli import cmd_fix
         from sync_skills.config import save_config
 
         # 创建孤儿 skill
@@ -2131,14 +2139,14 @@ class TestFixCommand:
         save_config(config, config_path)
 
         monkeypatch.setattr("builtins.input", lambda _: "n")
-        cmd_check(self._make_args(config_path))
+        cmd_fix(self._make_args(config_path))
         captured = capsys.readouterr()
         assert "未被管理" in captured.out
 
     def test_fix_adopts_orphan_skills(self, tmp_path, capsys, monkeypatch):
         """fix 应能收养孤儿 skill"""
         repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import cmd_check
+        from sync_skills.cli import cmd_fix
         from sync_skills.config import save_config
 
         # 创建孤儿 skill
@@ -2150,7 +2158,7 @@ class TestFixCommand:
         save_config(config, config_path)
 
         monkeypatch.setattr("builtins.input", lambda _: "y")
-        cmd_check(self._make_args(config_path))
+        cmd_fix(self._make_args(config_path))
 
         # 应已收养到 repo
         assert (repo_skills / "adopt-me" / "SKILL.md").is_file()
@@ -2163,7 +2171,7 @@ class TestPullCommand:
 
     def _make_args(self, config_path):
         import argparse
-        return argparse.Namespace(config=config_path)
+        return argparse.Namespace(config=config_path, dry_run=False, yes=False)
 
     def test_pull_shows_git_command(self, tmp_path, capsys, monkeypatch):
         """pull 应展示完整 git 命令"""
