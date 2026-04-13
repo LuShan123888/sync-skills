@@ -1,6 +1,6 @@
 ---
 name: sync-skills
-description: "Manage custom AI coding agent skills via git + symlink. Use when the user wants to add/remove/list/search custom skills, check git status, push/pull skill changes, or verify symlinks. TRIGGER on: 'sync-skills', 'add skill', 'remove skill', 'skill management', 'list skills', 'custom skill'."
+description: "Manage custom AI coding agent skills via git + symlink. Use when the user wants to add/remove/list custom skills, check git status, push/pull skill changes, or verify symlinks. TRIGGER on: 'sync-skills', 'add skill', 'remove skill', 'skill management', 'list skills', 'custom skill'."
 tools: [Bash]
 ---
 
@@ -16,33 +16,39 @@ The `sync-skills` CLI must be installed:
 uv tool install sync-skills
 ```
 
-## Important: Always Use `-y`
+## Important: Agent Execution Policy
 
-AI agents **cannot interact with stdin**. Always append `-y` to skip confirmation prompts.
+AI agents **cannot interact with stdin**, so follow this two-step pattern for **all mutating commands** (init, link, unlink, new, remove, doctor, push, pull):
+
+1. **First**: run with `--dry-run` to preview what will happen, show the output to the user
+2. **Then**: only after user confirms, re-run with `-y` to execute
+
+**Read-only commands** (`list`, `status`) are safe to run directly without `-y` or `--dry-run`.
 
 ## Commands Reference
 
-| User intent | Command |
-|---|---|
-| Initialize ~/Skills/ repo | `sync-skills init -y` (clone from remote or git init, idempotent) |
-| Link a skill (auto-scan by name) | `sync-skills link skill-name -y` |
-| Unlink a skill (restore files) | `sync-skills unlink skill-name -y` |
-| Unlink all skills | `sync-skills unlink --all -y` |
-| Create new custom skill | `sync-skills new skill-name -d "description" -y` |
-| Remove a skill permanently | `sync-skills remove skill-name -y` |
-| Remove multiple skills | `sync-skills remove a b c -y` |
-| Verify/repair symlinks | `sync-skills doctor -y` |
-| List custom skills | `sync-skills list` |
-| Show git status | `sync-skills status` |
-| Commit and push | `sync-skills push -m "update" -y` |
-| Pull and rebuild | `sync-skills pull -y` |
-| Preview without executing | `sync-skills <command> --dry-run` |
+| User intent | Command | Type |
+|---|---|---|
+| List custom skills | `sync-skills list` | read |
+| Show git status | `sync-skills status` | read |
+| Initialize ~/Skills/ repo | `sync-skills init` (clone from remote or git init, idempotent) | mutate |
+| Link a skill (auto-scan by name) | `sync-skills link skill-name` | mutate |
+| Unlink a skill (restore files) | `sync-skills unlink skill-name` | mutate |
+| Unlink all skills | `sync-skills unlink --all` | mutate |
+| Create new custom skill | `sync-skills new skill-name -d "description"` | mutate |
+| Remove a skill permanently | `sync-skills remove skill-name` | mutate |
+| Remove multiple skills | `sync-skills remove a b c` | mutate |
+| Verify/repair symlinks | `sync-skills doctor` | mutate |
+| Commit and push | `sync-skills push -m "update"` | mutate |
+| Pull and rebuild | `sync-skills pull` | mutate |
 
 ## Common Workflows
 
 ### 1. Create a new custom skill
 
 ```bash
+sync-skills new my-skill -d "My custom skill description" -t "tag1,tag2" --dry-run
+# show preview to user, wait for confirmation
 sync-skills new my-skill -d "My custom skill description" -t "tag1,tag2" -y
 ```
 
@@ -51,6 +57,8 @@ Creates `~/Skills/skills/my-skill/SKILL.md` with skeleton and symlinks to all ag
 ### 2. Link a wild skill
 
 ```bash
+sync-skills link my-skill --dry-run
+# show preview to user, wait for confirmation
 sync-skills link my-skill -y
 ```
 
@@ -63,7 +71,9 @@ The agent edits `~/Skills/skills/my-skill/SKILL.md` normally. Changes flow throu
 ### 4. Push changes to GitHub
 
 ```bash
-sync-skills status       # check what changed
+sync-skills status       # check what changed (read-only, safe)
+sync-skills push -m "update my-skill" --dry-run
+# show preview to user, wait for confirmation
 sync-skills push -m "update my-skill" -y
 ```
 
@@ -72,7 +82,9 @@ Shows full git commands (`git add -A`, `git commit -m "..."`, `git push -u origi
 ### 5. Pull changes from another machine
 
 ```bash
-sync-skills pull -y      # git pull + rebuild symlinks
+sync-skills pull --dry-run
+# show preview to user, wait for confirmation
+sync-skills pull -y
 ```
 
 Shows full git command (`git pull --rebase`) before confirming. Automatically repairs symlinks after pull.
@@ -80,6 +92,8 @@ Shows full git command (`git pull --rebase`) before confirming. Automatically re
 ### 6. Unlink a skill
 
 ```bash
+sync-skills unlink my-skill --dry-run
+# show preview to user, wait for confirmation
 sync-skills unlink my-skill -y
 ```
 
@@ -88,6 +102,8 @@ Removes the skill from management. Files are restored to all agent directories a
 ### 7. Verify and repair symlinks
 
 ```bash
+sync-skills doctor --dry-run
+# show preview to user, wait for confirmation
 sync-skills doctor -y
 ```
 
