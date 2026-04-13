@@ -9,17 +9,13 @@ from pathlib import Path
 DEFAULT_REPO = Path.home() / "Skills"
 REPO_SKILLS_DIR_NAME = "skills"  # 仓库内的 skills 子目录名
 
-DEFAULT_AGENTS_DIR = Path.home() / ".agents" / "skills"
-
 DEFAULT_AGENT_DIRS = [
+    Path.home() / ".agents" / "skills",
     Path.home() / ".claude" / "skills",
     Path.home() / ".codex" / "skills",
     Path.home() / ".gemini" / "skills",
     Path.home() / ".openclaw" / "skills",
 ]
-
-DEFAULT_GLOBAL_LOCK = Path.home() / ".agents" / ".skill-lock.json"
-DEFAULT_LOCAL_LOCK = Path.home() / "skills-lock.json"
 
 # ============================================================
 # Skill 骨架模板
@@ -49,6 +45,7 @@ description: "Description of what this skill does"
 DEFAULT_SOURCE = Path.home() / "Skills"
 
 DEFAULT_TARGETS = [
+    Path.home() / ".agents" / "skills",
     Path.home() / ".claude" / "skills",
     Path.home() / ".codex" / "skills",
     Path.home() / ".gemini" / "skills",
@@ -56,6 +53,7 @@ DEFAULT_TARGETS = [
 ]
 
 KNOWN_TOOLS = [
+    {"name": "Agents", "path": "~/.agents/skills"},
     {"name": "Claude Code", "path": "~/.claude/skills"},
     {"name": "Codex CLI", "path": "~/.codex/skills"},
     {"name": "Gemini CLI", "path": "~/.gemini/skills"},

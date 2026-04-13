@@ -6,7 +6,7 @@ tools: [Bash]
 
 # sync-skills
 
-Custom skill lifecycle manager for AI coding agents. Manages user-created skills via git + symlink, separate from external skills managed by `npx skills`.
+Custom skill lifecycle manager for AI coding agents. Manages user-created skills via git + symlink. Only manages skills explicitly added by the user.
 
 ## Prerequisites
 
@@ -24,22 +24,18 @@ AI agents **cannot interact with stdin**. Always append `-y` to skip confirmatio
 
 | User intent | Command |
 |---|---|
-| Initialize ~/Skills/ repo | `sync-skills init -y` |
-| Link a wild skill | `sync-skills link skill-name -y` |
-| Link all wild skills | `sync-skills link --all -y` |
-| List wild skills | `sync-skills link` |
-| Create new custom skill | `sync-skills add skill-name -d "description" -y` |
+| Initialize ~/Skills/ repo | `sync-skills init -y` (clone from remote or git init, idempotent) |
+| Link a skill (auto-scan by name) | `sync-skills link skill-name -y` |
 | Unlink a skill (restore files) | `sync-skills unlink skill-name -y` |
 | Unlink all skills | `sync-skills unlink --all -y` |
+| Create new custom skill | `sync-skills new skill-name -d "description" -y` |
 | Remove a skill permanently | `sync-skills remove skill-name -y` |
 | Remove multiple skills | `sync-skills remove a b c -y` |
-| Verify/repair symlinks | `sync-skills fix -y` |
+| Verify/repair symlinks | `sync-skills doctor -y` |
 | List custom skills | `sync-skills list` |
 | Show git status | `sync-skills status` |
 | Commit and push | `sync-skills push -m "update" -y` |
 | Pull and rebuild | `sync-skills pull -y` |
-| Search skills | `sync-skills search "query"` |
-| Show skill details | `sync-skills info skill-name` |
 | Preview without executing | `sync-skills <command> --dry-run` |
 
 ## Common Workflows
@@ -47,7 +43,7 @@ AI agents **cannot interact with stdin**. Always append `-y` to skip confirmatio
 ### 1. Create a new custom skill
 
 ```bash
-sync-skills add my-skill -d "My custom skill description" -t "tag1,tag2" -y
+sync-skills new my-skill -d "My custom skill description" -t "tag1,tag2" -y
 ```
 
 Creates `~/Skills/skills/my-skill/SKILL.md` with skeleton and symlinks to all agent directories.
@@ -58,11 +54,11 @@ Creates `~/Skills/skills/my-skill/SKILL.md` with skeleton and symlinks to all ag
 sync-skills link my-skill -y
 ```
 
-Adopts a wild skill (created by skill creators in agent directories) into management. If the same skill exists in multiple agent directories with different content, you'll be prompted to choose which version to use.
+Adopts a skill (existing in any agent directory or repo) into management. Auto-scans all agent directories and the repo for the named skill. If multiple versions exist, groups by content hash and lets the user choose (auto-selects latest with `-y`).
 
 ### 3. Edit a skill (via agent)
 
-The agent edits `~/.agents/skills/my-skill/SKILL.md` normally. Changes flow through symlinks to `~/Skills/skills/my-skill/SKILL.md` automatically.
+The agent edits `~/Skills/skills/my-skill/SKILL.md` normally. Changes flow through symlinks to all agent directories automatically.
 
 ### 4. Push changes to GitHub
 
@@ -87,15 +83,15 @@ Shows full git command (`git pull --rebase`) before confirming. Automatically re
 sync-skills unlink my-skill -y
 ```
 
-Removes the skill from management. Files are restored to `~/.agents/skills/my-skill/` as real files. The skill is removed from `~/Skills/skills/` and the state file.
+Removes the skill from management. Files are restored to all agent directories as real files. The skill is removed from `~/Skills/skills/` and the state file.
 
 ### 7. Verify and repair symlinks
 
 ```bash
-sync-skills fix -y
+sync-skills doctor -y
 ```
 
-Checks all managed skill symlinks, repairs broken links, detects missing links, orphan skills, and state inconsistencies.
+Checks all managed skill symlinks, repairs broken links, detects state inconsistencies.
 
 ## Flags
 
@@ -105,17 +101,16 @@ Checks all managed skill symlinks, repairs broken links, detects missing links, 
 | `--dry-run` | Preview without executing |
 | `--copy` | Use legacy copy-based sync |
 | `--config PATH` | Use custom config file |
-| `--all` | Apply to all (link/unlink) |
+| `--all` | Apply to all (unlink) |
 | `--message`, `-m` | Commit message (push command) |
-| `--description`, `-d` | Skill description (add command) |
-| `--tags`, `-t` | Comma-separated tags (add command) |
+| `--description`, `-d` | Skill description (new command) |
+| `--tags`, `-t` | Comma-separated tags (new command) |
 
 ## Architecture
 
-- **Custom skills**: stored in `~/Skills/` git repo, symlinked to `~/.agents/skills/`
-- **External skills**: managed by `npx skills`, stored as real files in `~/.agents/skills/`
-- **Detection**: external skills identified via lock files (`~/.agents/.skill-lock.json`, `~/skills-lock.json`)
+- **Custom skills**: stored in `~/Skills/` git repo, symlinked to all agent directories
 - **State file**: `~/.config/sync-skills/skills.json` tracks which skills are managed by sync-skills
+- **Single-layer symlink**: `~/Skills/skills/<name>` → `<agent-dir>/skills/<name>` (all agent dirs including `~/.agents/skills/`)
 
 ## Config File
 
@@ -125,8 +120,4 @@ Location: `~/.config/sync-skills/config.toml`
 repo = "~/Skills"
 agents_dir = "~/.agents/skills"
 state_file = "~/.config/sync-skills/skills.json"
-
-[external]
-global_lock = "~/.agents/.skill-lock.json"
-local_lock = "~/skills-lock.json"
 ```

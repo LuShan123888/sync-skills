@@ -1580,49 +1580,39 @@ class TestDryRun:
 
 
 # ============================================================
-# v1.0 新命令测试：add / remove / uninstall / push / pull / init
+# v1.0 新命令测试：add / remove / unlink / push / pull / init
 # ============================================================
 
 
 def _create_v1_env(tmp_path: Path):
-    """创建 v1.0 测试环境：repo + agents_dir + agent_dirs + config"""
-    import json
-    from sync_skills.config import Config, ExternalConfig
+    """创建 v1.1 测试环境：repo + agent_dirs（含 .agents/skills）+ config"""
+    from sync_skills.config import Config
 
     repo = tmp_path / "Skills"
     repo_skills = repo / "skills"
-    agents_dir = tmp_path / ".agents" / "skills"
-    agent_dirs = [tmp_path / ".claude" / "skills", tmp_path / ".codex" / "skills"]
+    agent_dirs = [tmp_path / ".agents" / "skills", tmp_path / ".claude" / "skills", tmp_path / ".codex" / "skills"]
     state_file = tmp_path / "state" / "skills.json"
 
-    for d in [repo_skills, agents_dir, state_file.parent] + agent_dirs:
+    for d in [repo_skills, state_file.parent] + agent_dirs:
         d.mkdir(parents=True)
-
-    # 外部 skill lock 文件
-    global_lock = tmp_path / ".agents" / ".skill-lock.json"
-    local_lock = tmp_path / "skills-lock.json"
-    global_lock.write_text('{"skills": {"external-skill": {"source": "npm"}}}')
-    local_lock.write_text('{}')
 
     # 空状态文件
     state_file.write_text('{"skills": {}}')
 
     config = Config(
         repo=repo,
-        agents_dir=agents_dir,
         agent_dirs=agent_dirs,
-        external=ExternalConfig(global_lock=global_lock, local_lock=local_lock),
         state_file=state_file,
     )
-    return repo, repo_skills, agents_dir, agent_dirs, config
+    return repo, repo_skills, agent_dirs, config
 
 
-class TestAddCommand:
-    """测试 sync-skills add 命令"""
+class TestNewCommand:
+    """测试 sync-skills new 命令"""
 
     def test_add_creates_skill_in_repo(self, tmp_path):
-        """add 应在 repo 中创建真实文件"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        """new 应在 repo 中创建真实文件"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill
 
         result = add_skill("my-skill", config, description="test skill")
@@ -1630,28 +1620,29 @@ class TestAddCommand:
         assert (repo_skills / "my-skill" / "SKILL.md").is_file()
 
     def test_add_creates_agents_symlink(self, tmp_path):
-        """add 应创建统一 Skill 目录 symlink"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        """new 应创建 .agents/skills symlink"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill
 
         add_skill("my-skill", config)
-        link = agents_dir / "my-skill"
+        link = agent_dirs[0] / "my-skill"
         assert link.is_symlink()
         assert link.resolve() == (repo_skills / "my-skill").resolve()
 
     def test_add_creates_agent_symlinks(self, tmp_path):
-        """add 应创建 Agent Skill 目录 symlink"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        """new 应为所有 agent 目录创建 symlink（含 .agents/skills）"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill
 
         add_skill("my-skill", config)
         for ad in agent_dirs:
             link = ad / "my-skill"
             assert link.is_symlink()
+            assert link.resolve() == (repo_skills / "my-skill").resolve()
 
     def test_add_rejects_duplicate_in_repo(self, tmp_path):
-        """add 应拒绝已存在于 repo 的 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        """new 应拒绝已存在于 repo 的 skill"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill
 
         add_skill("my-skill", config)
@@ -1659,29 +1650,21 @@ class TestAddCommand:
         assert result is False
 
     def test_add_rejects_duplicate_in_agents(self, tmp_path):
-        """add 应拒绝已存在于 agents_dir 的 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        """new 应拒绝已存在于 agent 目录的 skill"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill
 
-        # 在 agents_dir 创建外部 skill（真实目录）
-        ext_dir = agents_dir / "ext-skill"
+        # 在 agent 目录创建 skill（真实目录）
+        ext_dir = agent_dirs[1] / "ext-skill"
         ext_dir.mkdir()
         (ext_dir / "SKILL.md").write_text("---\nname: ext\n---\n")
 
         result = add_skill("ext-skill", config)
         assert result is False
 
-    def test_add_rejects_external_skill(self, tmp_path):
-        """add 应拒绝 lock 文件中的外部 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import add_skill
-
-        result = add_skill("external-skill", config)
-        assert result is False
-
     def test_add_with_tags(self, tmp_path):
-        """add 应支持 tags 参数"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        """new 应支持 tags 参数"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill
 
         add_skill("my-skill", config, tags=["code", "review"])
@@ -1694,44 +1677,36 @@ class TestRemoveCommand:
     """测试 sync-skills remove 命令"""
 
     def test_remove_deletes_all_artifacts(self, tmp_path):
-        """remove 应删除 repo 文件和所有 symlink"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        """remove 应删除 repo 文件和所有 agent 目录的 symlink"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill, remove_skill
 
         add_skill("my-skill", config)
         result = remove_skill("my-skill", config, auto_confirm=True)
         assert result is True
         assert not (repo_skills / "my-skill").exists()
-        assert not (agents_dir / "my-skill").exists()
         for ad in agent_dirs:
             assert not (ad / "my-skill").exists()
 
     def test_remove_then_add_succeeds(self, tmp_path):
         """remove 后应该能重新 add 同名 skill（bad case: 之前 remove 不彻底导致 add 失败）"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill, remove_skill
 
         add_skill("my-skill", config)
         remove_skill("my-skill", config, auto_confirm=True)
 
-        # 关键验证：remove 后 agents_dir 不应残留
-        assert not (agents_dir / "my-skill").exists()
+        # 关键验证：remove 后所有 agent 目录不应残留
+        for ad in agent_dirs:
+            assert not (ad / "my-skill").exists()
 
         # 应该能重新 add
         result = add_skill("my-skill", config)
         assert result is True
 
-    def test_remove_rejects_external(self, tmp_path):
-        """remove 应拒绝外部 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import remove_skill
-
-        result = remove_skill("external-skill", config, auto_confirm=True)
-        assert result is False
-
     def test_remove_rejects_orphan(self, tmp_path):
         """remove 应拒绝未管理的 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import remove_skill
 
         result = remove_skill("nonexistent", config, auto_confirm=True)
@@ -1742,8 +1717,8 @@ class TestUnlinkCommand:
     """测试 sync-skills unlink 命令"""
 
     def test_unlink_restores_files(self, tmp_path):
-        """unlink 应将文件还原到统一 Skill 目录"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        """unlink 应将文件还原到所有 agent 目录"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill, unlink_skill
 
         add_skill("my-skill", config)
@@ -1752,27 +1727,14 @@ class TestUnlinkCommand:
 
         # repo 中不应存在
         assert not (repo_skills / "my-skill").exists()
-        # agents_dir 应有真实文件
-        assert (agents_dir / "my-skill" / "SKILL.md").is_file()
-        assert not (agents_dir / "my-skill").is_symlink()
-
-    def test_unlink_preserves_agent_symlinks(self, tmp_path):
-        """unlink 应保留 Agent Skill 目录 symlink"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import add_skill, unlink_skill
-
-        add_skill("my-skill", config)
-        unlink_skill(["my-skill"], config, auto_confirm=True)
-
-        # Agent symlink 仍存在且有效
+        # 所有 agent 目录应有真实文件
         for ad in agent_dirs:
-            link = ad / "my-skill"
-            assert link.is_symlink()
-            assert link.resolve().exists()
+            assert (ad / "my-skill" / "SKILL.md").is_file()
+            assert not (ad / "my-skill").is_symlink()
 
     def test_unlink_all(self, tmp_path):
         """unlink --all 应移除所有已管理 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill, unlink_skill
 
         add_skill("skill-a", config)
@@ -1784,224 +1746,185 @@ class TestUnlinkCommand:
 
         # repo 应为空
         assert not any(repo_skills.iterdir())
-        # agents_dir 应有 3 个真实目录
-        assert (agents_dir / "skill-a" / "SKILL.md").is_file()
-        assert (agents_dir / "skill-b" / "SKILL.md").is_file()
-        assert (agents_dir / "skill-c" / "SKILL.md").is_file()
-
-    def test_unlink_rejects_external(self, tmp_path):
-        """unlink 应拒绝外部 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import unlink_skill
-
-        result = unlink_skill(["external-skill"], config, auto_confirm=True)
-        assert result is False
+        # 所有 agent 目录应有真实文件
+        for ad in agent_dirs:
+            assert (ad / "skill-a" / "SKILL.md").is_file()
+            assert (ad / "skill-b" / "SKILL.md").is_file()
+            assert (ad / "skill-c" / "SKILL.md").is_file()
 
     def test_unlink_no_managed_skills(self, tmp_path):
         """没有已管理 skill 时 unlink --all 应正常退出"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import unlink_skill
 
         result = unlink_skill(["--all"], config, auto_confirm=True)
         assert result is True
 
 
-class TestSymlinkIsolation:
-    """测试外部 skill 隔离（bad case: sync 误删外部 skill symlink）"""
-
-    def test_sync_does_not_touch_external_skills(self, tmp_path):
-        """sync 应跳过 lock 文件中的外部 skill，不创建 symlink"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import add_skill
-        from sync_skills.symlink import sync_all_links
-        from sync_skills.classification import get_external_skills
-        from sync_skills.state import get_managed_skills
-
-        # 添加自定义 skill
-        add_skill("custom-skill", config)
-
-        # 在 agents_dir 创建外部 skill（真实目录，模拟 npx skills 安装）
-        ext_dir = agents_dir / "ext-from-npm"
-        ext_dir.mkdir()
-        (ext_dir / "SKILL.md").write_text("---\nname: ext-from-npm\n---\n")
-
-        # 同步
-        external = get_external_skills(config.external.global_lock, config.external.local_lock)
-        managed = get_managed_skills(config.state_file)
-        states = sync_all_links(
-            config.agents_dir, config.repo_skills_dir,
-            config.effective_agent_dirs, external_skills=external,
-            managed_skills=managed,
-        )
-
-        # 只应管理 custom-skill，不包含 ext-from-npm
-        names = [s.name for s in states]
-        assert "custom-skill" in names
-        assert "ext-from-npm" not in names
-
-        # 外部 skill 应保持为真实目录
-        assert ext_dir.is_dir()
-        assert not ext_dir.is_symlink()
-
-    def test_add_does_not_overwrite_external_skill(self, tmp_path):
-        """add 不应覆盖 agents_dir 中已存在的外部 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import add_skill
-
-        # 在 agents_dir 创建外部 skill
-        ext_dir = agents_dir / "ext-skill"
-        ext_dir.mkdir()
-        (ext_dir / "SKILL.md").write_text("---\nname: ext\n---\n")
-
-        result = add_skill("ext-skill", config)
-        assert result is False
-        # 外部 skill 应保持为真实目录
-        assert ext_dir.is_dir()
-        assert not ext_dir.is_symlink()
-
-
 class TestLinkCommand:
-    """测试 sync-skills link 命令"""
+    """测试 sync-skills link 命令（按名称自动扫描）"""
 
-    def test_link_wild_skill_from_agent_dir(self, tmp_path):
-        """link 应将 Agent 目录中的野生 skill 纳入管理"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+    def test_link_skill_by_name(self, tmp_path):
+        """link 应按名称自动扫描并纳入管理"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import link_skill
 
-        # 在 claude skills 目录创建野生 skill
-        claude_dir = agent_dirs[0]
-        wild_skill = claude_dir / "wild-skill"
-        wild_skill.mkdir()
-        (wild_skill / "SKILL.md").write_text("# wild skill\n")
+        # 在 agent 目录创建 skill
+        skill_dir = agent_dirs[0] / "my-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# my skill\n")
 
-        result = link_skill("wild-skill", config, auto_confirm=True)
+        result = link_skill("my-skill", config, auto_confirm=True)
         assert result is True
 
         # 应复制到 repo
-        assert (repo_skills / "wild-skill" / "SKILL.md").is_file()
-        # 原 Agent 目录应为 symlink
-        assert (claude_dir / "wild-skill").is_symlink()
-        # 统一 Skill 目录应为 symlink
-        assert (agents_dir / "wild-skill").is_symlink()
+        assert (repo_skills / "my-skill" / "SKILL.md").is_file()
+        # 所有 agent 目录应为 symlink
+        for ad in agent_dirs:
+            assert (ad / "my-skill").is_symlink()
 
     def test_link_preserves_content(self, tmp_path):
         """link 应保留 skill 内容"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import link_skill
 
         content = "# my skill\n\nSome content here"
-        claude_dir = agent_dirs[0]
-        wild_skill = claude_dir / "my-skill"
-        wild_skill.mkdir()
-        (wild_skill / "SKILL.md").write_text(content)
+        skill_dir = agent_dirs[1] / "my-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(content)
 
         link_skill("my-skill", config, auto_confirm=True)
         assert (repo_skills / "my-skill" / "SKILL.md").read_text() == content
 
-    def test_link_rejects_already_custom(self, tmp_path):
-        """link 应拒绝已管理的自定义 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+    def test_link_rejects_already_managed(self, tmp_path):
+        """link 应拒绝已管理的 skill"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill, link_skill
 
         add_skill("existing", config)
+
         result = link_skill("existing", config, auto_confirm=True)
         assert result is False
 
-    def test_link_rejects_external(self, tmp_path):
-        """link 应拒绝外部 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import link_skill
-
-        result = link_skill("external-skill", config, auto_confirm=True)
-        assert result is False
-
     def test_link_rejects_nonexistent(self, tmp_path):
-        """link 应拒绝不存在的 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        """link 应拒绝不存在的 skill 名称"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import link_skill
 
         result = link_skill("nonexistent", config, auto_confirm=True)
         assert result is False
 
-    def test_detect_wild_skills(self, tmp_path):
-        """detect_wild_skills 应列出所有野生 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import detect_wild_skills
-
-        # 在两个 Agent 目录各创建一个野生 skill
-        (agent_dirs[0] / "skill-a").mkdir()
-        (agent_dirs[0] / "skill-a" / "SKILL.md").write_text("# a\n")
-        (agent_dirs[1] / "skill-b").mkdir()
-        (agent_dirs[1] / "skill-b" / "SKILL.md").write_text("# b\n")
-
-        wild = detect_wild_skills(config)
-        names = {w["name"] for w in wild}
-        assert "skill-a" in names
-        assert "skill-b" in names
-
-    def test_detect_wild_skills_ignores_managed(self, tmp_path):
-        """detect_wild_skills 应忽略已管理的 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import add_skill, detect_wild_skills
-
-        add_skill("managed", config)
-        wild = detect_wild_skills(config)
-        names = {w["name"] for w in wild}
-        assert "managed" not in names
-
-    def test_detect_wild_skills_ignores_symlinks(self, tmp_path):
-        """detect_wild_skills 应忽略 symlink（已管理的 skill）"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.lifecycle import add_skill, detect_wild_skills
-
-        add_skill("linked", config)
-        # agent dir 中的是 symlink，不算野生
-        wild = detect_wild_skills(config)
-        names = {w["name"] for w in wild}
-        assert "linked" not in names
-
-    def test_link_skill_in_multiple_agent_dirs(self, tmp_path):
-        """link 应处理 skill 存在于多个 Agent 目录的情况"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+    def test_link_same_content_auto_dedup(self, tmp_path):
+        """相同内容的多个副本应自动去重，不要求用户选择"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import link_skill
 
-        # 在两个 Agent 目录都创建同名野生 skill
-        for ad in agent_dirs:
-            skill = ad / "shared-skill"
-            skill.mkdir()
-            (skill / "SKILL.md").write_text("# shared\n")
+        content = "# same skill\n\nIdentical content"
 
-        result = link_skill("shared-skill", config, auto_confirm=True)
+        # 在两个 agent 目录创建相同内容的 skill
+        for ad in agent_dirs[:2]:
+            d = ad / "same-skill"
+            d.mkdir()
+            (d / "SKILL.md").write_text(content)
+
+        result = link_skill("same-skill", config, auto_confirm=True)
         assert result is True
 
         # 应复制到 repo
-        assert (repo_skills / "shared-skill" / "SKILL.md").is_file()
-        # 两个 Agent 目录都应为 symlink
+        assert (repo_skills / "same-skill" / "SKILL.md").read_text() == content
+        # 所有 agent 目录应为 symlink
         for ad in agent_dirs:
-            assert (ad / "shared-skill").is_symlink()
-        # 统一 Skill 目录应为 symlink
-        assert (agents_dir / "shared-skill").is_symlink()
+            assert (ad / "same-skill").is_symlink()
 
-    def test_link_skill_from_agents_dir(self, tmp_path):
-        """link 应能从统一 Skill 目录收养野生 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+    def test_link_conflict_md5_groups(self, tmp_path):
+        """不同版本的 skill 应按 MD5 分组让用户选择"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import link_skill
 
-        # 在统一 Skill 目录创建野生 skill（不在 Agent 目录中）
-        wild = agents_dir / "agents-dir-skill"
-        wild.mkdir()
-        (wild / "SKILL.md").write_text("# from agents dir\n")
+        # 版本 A（在 .agents/skills）
+        d1 = agent_dirs[0] / "multi-skill"
+        d1.mkdir()
+        (d1 / "SKILL.md").write_text("# version A\n")
 
-        result = link_skill("agents-dir-skill", config, auto_confirm=True)
+        # 版本 B（在 .claude/skills）
+        d2 = agent_dirs[1] / "multi-skill"
+        d2.mkdir()
+        (d2 / "SKILL.md").write_text("# version B\n")
+
+        # 模拟用户选择版本 2（版本 A 在 .agents/skills，按 hash 排序后）
+        import unittest.mock
+        with unittest.mock.patch("builtins.input", side_effect=["2", "y"]):
+            result = link_skill("multi-skill", config)
         assert result is True
 
         # 应复制到 repo
-        assert (repo_skills / "agents-dir-skill" / "SKILL.md").is_file()
-        # 原 agents_dir 中的应被替换为 symlink
-        assert (agents_dir / "agents-dir-skill").is_symlink()
-        # Agent 目录也应创建 symlink
+        assert (repo_skills / "multi-skill" / "SKILL.md").is_file()
+        # 内容应为版本 A（hash 排序第二位）
+        assert (repo_skills / "multi-skill" / "SKILL.md").read_text() == "# version A\n"
+
+    def test_link_conflict_auto_confirm(self, tmp_path):
+        """-y 模式下有冲突时应自动选择最新修改的版本"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import link_skill
+        import time
+
+        # 旧版本
+        d1 = agent_dirs[0] / "auto-skill"
+        d1.mkdir()
+        (d1 / "SKILL.md").write_text("# old version\n")
+
+        time.sleep(0.1)
+
+        # 新版本
+        d2 = agent_dirs[1] / "auto-skill"
+        d2.mkdir()
+        (d2 / "SKILL.md").write_text("# new version\n")
+
+        result = link_skill("auto-skill", config, auto_confirm=True)
+        assert result is True
+
+        # 应选择最新修改的版本（新版本）
+        assert (repo_skills / "auto-skill" / "SKILL.md").read_text() == "# new version\n"
+
+    def test_link_from_repo_version(self, tmp_path):
+        """link 应能选择 repo 中的版本"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import link_skill
+
+        # 在 repo 中创建 skill（不在状态文件中）
+        d = repo_skills / "repo-skill"
+        d.mkdir()
+        (d / "SKILL.md").write_text("# from repo\n")
+
+        result = link_skill("repo-skill", config, auto_confirm=True)
+        assert result is True
+
+        # repo 中的文件应保留
+        assert (repo_skills / "repo-skill" / "SKILL.md").read_text() == "# from repo\n"
+        # 所有 agent 目录应为 symlink
         for ad in agent_dirs:
-            assert (ad / "agents-dir-skill").is_symlink()
+            assert (ad / "repo-skill").is_symlink()
+
+    def test_link_deletes_all_other_copies(self, tmp_path):
+        """link 应删除所有非选定源的副本"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import link_skill
+
+        # 在 agent_dirs[0] 和 agent_dirs[1] 创建相同内容
+        content = "# same\n"
+        for ad in agent_dirs[:2]:
+            d = ad / "dup-skill"
+            d.mkdir()
+            (d / "SKILL.md").write_text(content)
+
+        result = link_skill("dup-skill", config, auto_confirm=True)
+        assert result is True
+
+        # agent 目录应全部变为 symlink
+        for ad in agent_dirs:
+            link = ad / "dup-skill"
+            assert link.is_symlink(), f"{ad} / dup-skill 应为 symlink"
+            assert link.resolve() == (repo_skills / "dup-skill").resolve()
 
 
 class TestPushCommand:
@@ -2009,7 +1932,7 @@ class TestPushCommand:
 
     def test_push_commits_and_shows_branch_info(self, tmp_path, capsys, monkeypatch):
         """push 应 commit 并显示分支信息让用户确认"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill
         from sync_skills.git_ops import git_init
         from sync_skills.cli import cmd_push
@@ -2040,7 +1963,7 @@ class TestStatusCommand:
 
     def test_status_shows_skill_state(self, tmp_path, capsys):
         """status 应显示 skill 管理状态"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.cli import cmd_status
         from sync_skills.git_ops import git_init
         from sync_skills.lifecycle import add_skill
@@ -2055,115 +1978,176 @@ class TestStatusCommand:
         captured = capsys.readouterr()
         assert "test-skill" in captured.out
 
-    def test_status_detects_orphan(self, tmp_path, capsys):
-        """status 应检测孤儿 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import cmd_status
-        from sync_skills.git_ops import git_init
-        from sync_skills.config import save_config
 
-        git_init(repo)
-
-        # 创建孤儿 skill（在 agents_dir 中，不在 repo 中，不在 lock 中）
-        orphan = agents_dir / "orphan-skill"
-        orphan.mkdir()
-        (orphan / "SKILL.md").write_text("# orphan\n")
-
-        config_path = tmp_path / "config.toml"
-        save_config(config, config_path)
-
-        cmd_status(self._make_args(config_path))
-        captured = capsys.readouterr()
-        assert "孤儿" in captured.out
-
-
-class TestFixCommand:
-    """测试 sync-skills fix 命令"""
+class TestDoctorCommand:
+    """测试 sync-skills doctor 命令（三层状态检测）"""
 
     def _make_args(self, config_path):
         import argparse
         return argparse.Namespace(config=config_path, dry_run=False, yes=False)
 
-    def test_fix_detects_broken_links(self, tmp_path, capsys, monkeypatch):
-        """fix 应检测断链 symlink（一级链路：agent dir → agents dir）"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import cmd_fix
+    def _make_args_yes(self, config_path):
+        import argparse
+        return argparse.Namespace(config=config_path, dry_run=False, yes=True)
+
+    def test_doctor_no_managed_skills(self, tmp_path, capsys):
+        """没有已管理 skill 时应提示"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
         from sync_skills.config import save_config
 
         config_path = tmp_path / "config.toml"
         save_config(config, config_path)
 
-        # 直接在 Agent 目录创建指向 agents_dir 的断链（一级）
-        import os
-        os.symlink(agents_dir / "nonexistent-skill", agent_dirs[0] / "nonexistent-skill")
-
-        monkeypatch.setattr("builtins.input", lambda _: "n")
-        cmd_fix(self._make_args(config_path))
+        cmd_doctor(self._make_args_yes(config_path))
         captured = capsys.readouterr()
-        assert "断链" in captured.out
+        assert "没有已管理的 skill" in captured.out
 
-    def test_fix_detects_missing_agents_links(self, tmp_path, capsys, monkeypatch):
-        """fix 应检测缺失的统一 Skill 目录 symlink"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import cmd_fix
-        from sync_skills.lifecycle import add_skill
+    def test_doctor_aligns_state_with_repo(self, tmp_path, capsys):
+        """repo 中有但状态文件中没有的 skill 应自动补充登记"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
         from sync_skills.config import save_config
+
+        # 在 repo 中创建 skill（不在状态文件中）
+        (repo_skills / "unregistered").mkdir()
+        (repo_skills / "unregistered" / "SKILL.md").write_text("# unregistered\n")
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        cmd_doctor(self._make_args_yes(config_path))
+        captured = capsys.readouterr()
+
+        assert "补充登记" in captured.out
+        assert "unregistered" in captured.out
+
+        # 验证状态文件已更新
+        from sync_skills.state import get_managed_skills
+        managed = get_managed_skills(config.state_file)
+        assert "unregistered" in managed
+
+    def test_doctor_detects_orphaned_skills(self, tmp_path, capsys):
+        """状态文件中有但 repo 中没有的 skill 应报告为 orphaned"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
+        from sync_skills.config import save_config
+        from sync_skills.state import add_managed
+
+        # 在状态文件中注册一个不存在的 skill
+        add_managed("ghost-skill", config.state_file)
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        cmd_doctor(self._make_args_yes(config_path))
+        captured = capsys.readouterr()
+
+        assert "ghost-skill" in captured.out
+        assert "仓库中不存在" in captured.out
+
+    def test_doctor_repairs_missing_symlinks(self, tmp_path, capsys):
+        """缺失的 symlink 应自动修复"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
+        from sync_skills.config import save_config
+        from sync_skills.lifecycle import add_skill
 
         add_skill("test-skill", config)
+
         config_path = tmp_path / "config.toml"
         save_config(config, config_path)
 
-        # 手动删除统一 Skill 目录 symlink
-        agents_link = agents_dir / "test-skill"
-        if agents_link.is_symlink():
-            agents_link.unlink()
+        # 手动删除一个 agent 目录的 symlink
+        (agent_dirs[1] / "test-skill").unlink()
 
-        monkeypatch.setattr("builtins.input", lambda _: "y")
-        cmd_fix(self._make_args(config_path))
+        cmd_doctor(self._make_args_yes(config_path))
         captured = capsys.readouterr()
+
         # 应检测到缺失并修复
-        assert (agents_dir / "test-skill").is_symlink()
+        assert "已修复" in captured.out
+        assert (agent_dirs[1] / "test-skill").is_symlink()
 
-    def test_fix_detects_orphan_skills(self, tmp_path, capsys, monkeypatch):
-        """fix 应检测孤儿 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import cmd_fix
+    def test_doctor_repairs_broken_symlinks(self, tmp_path, capsys):
+        """断链 symlink 应自动修复"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
         from sync_skills.config import save_config
+        from sync_skills.lifecycle import add_skill
 
-        # 创建孤儿 skill
-        orphan = agents_dir / "orphan-skill"
-        orphan.mkdir()
-        (orphan / "SKILL.md").write_text("# orphan\n")
+        add_skill("test-skill", config)
 
         config_path = tmp_path / "config.toml"
         save_config(config, config_path)
 
-        monkeypatch.setattr("builtins.input", lambda _: "n")
-        cmd_fix(self._make_args(config_path))
+        # 将 symlink 替换为指向不存在目标的断链
+        (agent_dirs[0] / "test-skill").unlink()
+        import os
+        os.symlink(repo_skills / "nonexistent-target", agent_dirs[0] / "test-skill")
+
+        cmd_doctor(self._make_args_yes(config_path))
         captured = capsys.readouterr()
-        assert "未被管理" in captured.out
 
-    def test_fix_adopts_orphan_skills(self, tmp_path, capsys, monkeypatch):
-        """fix 应能收养孤儿 skill"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import cmd_fix
+        assert "已修复" in captured.out
+        # 修复后应正确指向 repo
+        assert (agent_dirs[0] / "test-skill").resolve() == (repo_skills / "test-skill").resolve()
+
+    def test_doctor_detects_real_dir_conflict(self, tmp_path, capsys):
+        """真实目录（非 symlink）应报告为冲突，不自动覆盖"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
         from sync_skills.config import save_config
+        from sync_skills.lifecycle import add_skill
 
-        # 创建孤儿 skill
-        orphan = agents_dir / "adopt-me"
-        orphan.mkdir()
-        (orphan / "SKILL.md").write_text("# adopt me\n")
+        add_skill("test-skill", config)
 
         config_path = tmp_path / "config.toml"
         save_config(config, config_path)
 
-        monkeypatch.setattr("builtins.input", lambda _: "y")
-        cmd_fix(self._make_args(config_path))
+        # 将一个 agent 目录的 symlink 替换为真实目录
+        (agent_dirs[0] / "test-skill").unlink()
+        (agent_dirs[0] / "test-skill").mkdir()
+        (agent_dirs[0] / "test-skill" / "SKILL.md").write_text("# different\n")
 
-        # 应已收养到 repo
-        assert (repo_skills / "adopt-me" / "SKILL.md").is_file()
-        # 原 agents_dir 应为 symlink
-        assert (agents_dir / "adopt-me").is_symlink()
+        cmd_doctor(self._make_args_yes(config_path))
+        captured = capsys.readouterr()
+
+        # -y 模式下应报告冲突，不自动覆盖
+        assert "冲突" in captured.out or "真实目录" in captured.out
+        # 真实目录应保持不变
+        assert (agent_dirs[0] / "test-skill").is_dir()
+        assert not (agent_dirs[0] / "test-skill").is_symlink()
+
+    def test_doctor_verifies_healthy_state(self, tmp_path, capsys):
+        """健康状态下应全部验证通过"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
+        from sync_skills.config import save_config
+        from sync_skills.lifecycle import add_skill
+
+        add_skill("test-skill", config)
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        cmd_doctor(self._make_args_yes(config_path))
+        captured = capsys.readouterr()
+
+        assert "全部正常" in captured.out
+        assert "已修复" not in captured.out
+
+    def test_doctor_compatibility_alias_fix(self, tmp_path, capsys):
+        """fix 应作为 doctor 的兼容别名"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import main
+        from sync_skills.config import save_config
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        main(["--config", str(config_path), "fix", "-y"])
+        captured = capsys.readouterr()
+        assert "错误" not in captured.out
 
 
 class TestPullCommand:
@@ -2175,7 +2159,7 @@ class TestPullCommand:
 
     def test_pull_shows_git_command(self, tmp_path, capsys, monkeypatch):
         """pull 应展示完整 git 命令"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.cli import cmd_pull
         from sync_skills.git_ops import git_init
         from sync_skills.config import save_config
@@ -2191,21 +2175,24 @@ class TestPullCommand:
 
     def test_pull_checks_state_before_pull(self, tmp_path, capsys, monkeypatch):
         """pull 应在执行前检查 skill 管理状态"""
-        repo, repo_skills, agents_dir, agent_dirs, config = _create_v1_env(tmp_path)
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.cli import cmd_pull
-        from sync_skills.git_ops import git_init
         from sync_skills.config import save_config
+        from sync_skills.git_ops import git_init
+        from sync_skills.lifecycle import add_skill
 
         git_init(repo)
+        add_skill("test-skill", config)
         config_path = tmp_path / "config.toml"
         save_config(config, config_path)
 
-        # 在 Agent 目录创建一级断链（指向 agents_dir 中不存在的目标）
+        # 在 Agent 目录创建一个断链（将已管理 skill 的 symlink 替换为断链）
+        (agent_dirs[0] / "test-skill").unlink()
         import os
-        os.symlink(agents_dir / "broken-target", agent_dirs[0] / "broken-target")
+        os.symlink(repo_skills / "nonexistent-target", agent_dirs[0] / "test-skill")
 
         monkeypatch.setattr("builtins.input", lambda _: "y")
         cmd_pull(self._make_args(config_path))
         captured = capsys.readouterr()
         # 应检测到异常并提示
-        assert "断链" in captured.out
+        assert "异常" in captured.out

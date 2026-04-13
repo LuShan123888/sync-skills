@@ -78,3 +78,36 @@ def remove_managed(name: str, state_path: Path | None = None) -> None:
     state = load_state(path)
     state["skills"].pop(name, None)
     save_state(state, path)
+
+
+# ============================================================
+# 状态对齐
+# ============================================================
+
+def align_state_with_repo(state_path: Path, repo_skills_dir: Path) -> tuple[list[str], list[str]]:
+    """对齐状态文件与 repo，以 repo 为准。
+
+    返回 (added, orphaned):
+    - added: repo 中有但状态文件中没有（已自动补充）
+    - orphaned: 状态文件中有但 repo 中没有
+    """
+    managed = get_managed_skills(state_path)
+
+    # 扫描 repo 中所有 skill
+    repo_skills = set()
+    if repo_skills_dir.is_dir():
+        for d in repo_skills_dir.iterdir():
+            if d.name.startswith(".") or not d.is_dir():
+                continue
+            if (d / "SKILL.md").is_file():
+                repo_skills.add(d.name)
+
+    # 补充注册：repo 中有但状态文件中没有
+    added = sorted(repo_skills - managed)
+    for name in added:
+        add_managed(name, state_path)
+
+    # orphaned：状态文件中有但 repo 中没有
+    orphaned = sorted(managed - repo_skills)
+
+    return added, orphaned

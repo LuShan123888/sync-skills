@@ -8,9 +8,6 @@ from .constants import (
     CONFIG_DIR,
     CONFIG_FILE,
     DEFAULT_AGENT_DIRS,
-    DEFAULT_AGENTS_DIR,
-    DEFAULT_GLOBAL_LOCK,
-    DEFAULT_LOCAL_LOCK,
     DEFAULT_REPO,
     DEFAULT_SOURCE,
     DEFAULT_TARGETS,
@@ -24,13 +21,6 @@ from .constants import (
 # ============================================================
 
 @dataclass
-class ExternalConfig:
-    """外部 skill lock 文件路径"""
-    global_lock: Path = field(default_factory=lambda: DEFAULT_GLOBAL_LOCK)
-    local_lock: Path = field(default_factory=lambda: DEFAULT_LOCAL_LOCK)
-
-
-@dataclass
 class Target:
     name: str
     path: Path
@@ -38,12 +28,10 @@ class Target:
 
 @dataclass
 class Config:
-    """v1.0 配置：自定义 skill 管理"""
-    # 新字段
+    """v1.1 配置：自定义 skill 管理"""
+    # 核心字段
     repo: Path = field(default_factory=lambda: DEFAULT_REPO)
-    agents_dir: Path = field(default_factory=lambda: DEFAULT_AGENTS_DIR)
     agent_dirs: list[Path] | None = None  # None = 使用内置默认值
-    external: ExternalConfig = field(default_factory=ExternalConfig)
     state_file: Path = field(default_factory=lambda: STATE_FILE)
 
     # 旧版兼容字段（仅 --copy 模式）
@@ -55,8 +43,6 @@ class Config:
     def from_defaults(cls) -> "Config":
         return cls(
             repo=DEFAULT_REPO,
-            agents_dir=DEFAULT_AGENTS_DIR,
-            external=ExternalConfig(),
             state_file=STATE_FILE,
             source=DEFAULT_SOURCE,
             targets=[Target(name="builtin", path=p) for p in DEFAULT_TARGETS],
@@ -118,10 +104,6 @@ def load_config(config_path: Path | None = None) -> Config:
     if repo_raw:
         config.repo = _expand_home(repo_raw)
 
-    agents_dir_raw = data.get("agents_dir", "")
-    if agents_dir_raw:
-        config.agents_dir = _expand_home(agents_dir_raw)
-
     state_file_raw = data.get("state_file", "")
     if state_file_raw:
         config.state_file = _expand_home(state_file_raw)
@@ -130,16 +112,6 @@ def load_config(config_path: Path | None = None) -> Config:
     agent_dirs_raw = data.get("agent_dirs")
     if agent_dirs_raw is not None:
         config.agent_dirs = [_expand_home(p) for p in agent_dirs_raw]
-
-    # [external] 段
-    ext_section = data.get("external", {})
-    if isinstance(ext_section, dict):
-        gl = ext_section.get("global_lock", "")
-        if gl:
-            config.external.global_lock = _expand_home(gl)
-        ll = ext_section.get("local_lock", "")
-        if ll:
-            config.external.local_lock = _expand_home(ll)
 
     # 旧版字段兼容
     source_raw = data.get("source", "")
@@ -174,7 +146,6 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
 
     lines = [
         f'repo = "{_unexpand_home(config.repo)}"',
-        f'agents_dir = "{_unexpand_home(config.agents_dir)}"',
         f'state_file = "{_unexpand_home(config.state_file)}"',
     ]
 
@@ -191,13 +162,8 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     if config.source:
         lines.append(f'source = "{_unexpand_home(config.source)}"')
 
-    lines.append("")
-    lines.append("[external]")
-    lines.append(f'global_lock = "{_unexpand_home(config.external.global_lock)}"')
-    lines.append(f'local_lock = "{_unexpand_home(config.external.local_lock)}"')
-    lines.append("")
-
     if config.targets:
+        lines.append("")
         lines.append("# 目标目录列表（旧版兼容）")
         for t in config.targets:
             lines.append(f'[[targets]]')
