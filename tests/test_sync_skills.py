@@ -1927,6 +1927,283 @@ class TestLinkCommand:
             assert link.resolve() == (repo_skills / "dup-skill").resolve()
 
 
+class TestAutoCommit:
+    """测试 add/remove/link/unlink 操作后自动提交"""
+
+    @staticmethod
+    def _setup_git(repo: Path):
+        """初始化 git 仓库。"""
+        import subprocess
+        repo.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", str(repo)], capture_output=True, check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@test.com"],
+                       capture_output=True, check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"],
+                       capture_output=True, check=True)
+
+    def test_add_auto_commits(self, tmp_path, monkeypatch, capsys):
+        """add 后应自动 git commit"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        self._setup_git(repo)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+
+        add_skill("commit-skill", config)
+
+        output = capsys.readouterr().out
+        assert "[git]" in output
+        assert "add: commit-skill" in output
+
+    def test_remove_auto_commits(self, tmp_path, monkeypatch, capsys):
+        """remove 后应自动 git commit"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, remove_skill
+
+        self._setup_git(repo)
+        add_skill("rm-skill", config)
+
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        remove_skill("rm-skill", config, auto_confirm=True)
+
+        output = capsys.readouterr().out
+        assert "[git]" in output
+        assert "remove: rm-skill" in output
+
+    def test_link_auto_commits(self, tmp_path, monkeypatch, capsys):
+        """link 后应自动 git commit"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import link_skill
+
+        self._setup_git(repo)
+        skill_dir = agent_dirs[0] / "link-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# link\n")
+
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        link_skill("link-skill", config, auto_confirm=True)
+
+        output = capsys.readouterr().out
+        assert "[git]" in output
+        assert "link: link-skill" in output
+
+    def test_unlink_single_auto_commits(self, tmp_path, monkeypatch, capsys):
+        """unlink 单个 skill 后应自动 git commit"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, unlink_skill
+
+        self._setup_git(repo)
+        add_skill("ul-skill", config)
+
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        unlink_skill(["ul-skill"], config, auto_confirm=True)
+
+        output = capsys.readouterr().out
+        assert "[git]" in output
+        assert "unlink: ul-skill" in output
+
+    def test_unlink_all_auto_commits(self, tmp_path, monkeypatch, capsys):
+        """unlink --all 后应自动 git commit，消息包含 skill 数量"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, unlink_skill
+
+        self._setup_git(repo)
+        add_skill("s1", config)
+        add_skill("s2", config)
+        add_skill("s3", config)
+
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        unlink_skill(["--all"], config, auto_confirm=True)
+
+        output = capsys.readouterr().out
+        assert "[git]" in output
+        assert "unlink: 3 skills" in output
+
+    def test_unlink_multiple_auto_commits(self, tmp_path, monkeypatch, capsys):
+        """unlink 多个指定 skill 后应自动 git commit"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, unlink_skill
+
+        self._setup_git(repo)
+        add_skill("ma", config)
+        add_skill("mb", config)
+
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        unlink_skill(["ma", "mb"], config, auto_confirm=True)
+
+        output = capsys.readouterr().out
+        assert "[git]" in output
+        assert "unlink: 2 skills" in output
+
+    def test_commit_message_contains_timestamp(self, tmp_path, monkeypatch, capsys):
+        """commit 消息应包含时间戳"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        self._setup_git(repo)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+
+        add_skill("ts-skill", config)
+
+        output = capsys.readouterr().out
+        # 时间戳格式 YYYY-MM-DD HH:MM
+        import re
+        assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", output)
+
+    def test_commit_skipped_when_no_changes(self, tmp_path, monkeypatch, capsys):
+        """git_add_commit 返回 False 时不应输出 [git]"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        self._setup_git(repo)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: False)
+
+        add_skill("no-commit-skill", config)
+
+        output = capsys.readouterr().out
+        assert "[git]" not in output
+
+    def test_add_dry_run_no_commit(self, tmp_path, monkeypatch):
+        """add --dry-run 不应触发 auto commit"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+
+        self._setup_git(repo)
+        committed = []
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
+                            lambda r, m: committed.append(m) or True)
+
+        add_skill("dry-skill", config, dry_run=True)
+
+        assert len(committed) == 0
+
+    def test_remove_dry_run_no_commit(self, tmp_path, monkeypatch):
+        """remove --dry-run 不应触发 auto commit"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, remove_skill
+
+        self._setup_git(repo)
+        committed = []
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
+                            lambda r, m: committed.append(m) or True)
+
+        # 用 mock add 来避免真实 git commit
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
+                            lambda r, m: committed.append(m) or True)
+        add_skill("dry-rm", config)
+        # 清空记录，只跟踪 remove 的调用
+        committed.clear()
+
+        remove_skill("dry-rm", config, auto_confirm=True, dry_run=True)
+
+        assert len(committed) == 0
+
+    def test_link_dry_run_no_commit(self, tmp_path, monkeypatch):
+        """link --dry-run 不应触发 auto commit"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import link_skill
+
+        self._setup_git(repo)
+        skill_dir = agent_dirs[0] / "dry-link"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# dry\n")
+
+        committed = []
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
+                            lambda r, m: committed.append(m) or True)
+
+        link_skill("dry-link", config, auto_confirm=True, dry_run=True)
+
+        assert len(committed) == 0
+
+    def test_unlink_dry_run_no_commit(self, tmp_path, monkeypatch):
+        """unlink --dry-run 不应触发 auto commit"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, unlink_skill
+
+        self._setup_git(repo)
+        committed = []
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
+                            lambda r, m: committed.append(m) or True)
+
+        add_skill("dry-ul", config)
+        committed.clear()
+
+        unlink_skill(["dry-ul"], config, auto_confirm=True, dry_run=True)
+
+        assert len(committed) == 0
+
+    def test_real_git_commit_after_add(self, tmp_path):
+        """add 后应有真实 git commit 记录"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill
+        import subprocess
+
+        self._setup_git(repo)
+
+        add_skill("real-skill", config)
+
+        result = subprocess.run(
+            ["git", "-C", str(repo), "log", "--oneline", "-1"],
+            capture_output=True, text=True, check=True,
+        )
+        assert "add: real-skill" in result.stdout
+
+    def test_real_git_commit_after_remove(self, tmp_path):
+        """remove 后应有真实 git commit 记录"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, remove_skill
+        import subprocess
+
+        self._setup_git(repo)
+
+        add_skill("real-rm", config)
+        remove_skill("real-rm", config, auto_confirm=True)
+
+        result = subprocess.run(
+            ["git", "-C", str(repo), "log", "--oneline", "-1"],
+            capture_output=True, text=True, check=True,
+        )
+        assert "remove: real-rm" in result.stdout
+
+    def test_real_git_commit_after_link(self, tmp_path):
+        """link 后应有真实 git commit 记录"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import link_skill
+        import subprocess
+
+        self._setup_git(repo)
+
+        skill_dir = agent_dirs[0] / "real-link"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# real link\n")
+
+        link_skill("real-link", config, auto_confirm=True)
+
+        result = subprocess.run(
+            ["git", "-C", str(repo), "log", "--oneline", "-1"],
+            capture_output=True, text=True, check=True,
+        )
+        assert "link: real-link" in result.stdout
+
+    def test_real_git_commit_after_unlink(self, tmp_path):
+        """unlink 后应有真实 git commit 记录"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.lifecycle import add_skill, unlink_skill
+        import subprocess
+
+        self._setup_git(repo)
+
+        add_skill("real-ul", config)
+        unlink_skill(["real-ul"], config, auto_confirm=True)
+
+        result = subprocess.run(
+            ["git", "-C", str(repo), "log", "--oneline", "-1"],
+            capture_output=True, text=True, check=True,
+        )
+        assert "unlink: real-ul" in result.stdout
+
+
 class TestPushCommand:
     """测试 sync-skills push 命令"""
 

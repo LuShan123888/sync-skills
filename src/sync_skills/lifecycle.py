@@ -552,9 +552,10 @@ def unlink_skill(
 
             results[name] = _unlink_one(name, config, dry_run=dry_run)
 
-        unlinked = [n for n, ok in results.items() if ok]
-        if unlinked:
-            _auto_commit(config, "unlink", unlinked)
+        if not dry_run:
+            unlinked = [n for n, ok in results.items() if ok]
+            if unlinked:
+                _auto_commit(config, "unlink", unlinked)
 
         success = sum(1 for v in results.values() if v)
         total = len(results)

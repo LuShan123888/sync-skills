@@ -271,3 +271,175 @@ class TestInitAutoConfirm:
 
         assert result is True
         assert not (config.repo / ".git").exists()
+
+
+class TestInitPreviewSymlinkDetails:
+    """init 预览展示具体 symlink 详情"""
+
+    @staticmethod
+    def _skip_agent_select(monkeypatch):
+        """跳过 _select_agents，避免检测到额外 agent 目录。"""
+        monkeypatch.setattr("sync_skills.lifecycle._select_agents", lambda c: None)
+
+    def test_preview_shows_verified_skills(self, tmp_path, monkeypatch, capsys):
+        """已验证的 skill 应显示 ✓ 标记"""
+        config = _make_config(tmp_path)
+        cp = _config_path(tmp_path)
+
+        _setup_git_repo(config.repo)
+        skills_dir = config.repo / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "skill-a").mkdir()
+        (skills_dir / "skill-a" / "SKILL.md").write_text("# a\n")
+        _setup_state(config.state_file, {"skill-a"})
+        _setup_agent_dirs(config.agent_dirs)
+        for ad in config.agent_dirs:
+            (ad / "skill-a").symlink_to(skills_dir / "skill-a")
+
+        self._skip_agent_select(monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda _: next(iter(["", "y"])))
+
+        init_repo(config, config_path=cp)
+
+        output = capsys.readouterr().out
+        assert "✓" in output
+        assert "skill-a" in output
+
+    def test_preview_shows_create_skills(self, tmp_path, monkeypatch, capsys):
+        """需要创建 symlink 的 skill 应显示 + 标记"""
+        config = _make_config(tmp_path)
+        cp = _config_path(tmp_path)
+
+        _setup_git_repo(config.repo)
+        skills_dir = config.repo / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "new-skill").mkdir()
+        (skills_dir / "new-skill" / "SKILL.md").write_text("# new\n")
+        _setup_state(config.state_file, {"new-skill"})
+        _setup_agent_dirs(config.agent_dirs)
+
+        self._skip_agent_select(monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda _: next(iter(["", "y"])))
+
+        init_repo(config, config_path=cp)
+
+        output = capsys.readouterr().out
+        assert "+" in output
+        assert "new-skill" in output
+
+    def test_preview_shows_repair_skills(self, tmp_path, monkeypatch, capsys):
+        """断链的 skill 应显示 ! 标记"""
+        config = _make_config(tmp_path)
+        cp = _config_path(tmp_path)
+
+        _setup_git_repo(config.repo)
+        skills_dir = config.repo / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "broken-skill").mkdir()
+        (skills_dir / "broken-skill" / "SKILL.md").write_text("# broken\n")
+        _setup_state(config.state_file, {"broken-skill"})
+        _setup_agent_dirs(config.agent_dirs)
+        (config.agent_dirs[0] / "broken-skill").symlink_to(tmp_path / "nonexistent")
+
+        self._skip_agent_select(monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda _: next(iter(["", "y"])))
+
+        init_repo(config, config_path=cp)
+
+        output = capsys.readouterr().out
+        assert "!" in output
+        assert "broken-skill" in output
+
+    def test_preview_shows_agent_names_for_create(self, tmp_path, monkeypatch, capsys):
+        """+ 行应包含需要创建 symlink 的 agent 目录名"""
+        config = _make_config(tmp_path)
+        cp = _config_path(tmp_path)
+
+        _setup_git_repo(config.repo)
+        skills_dir = config.repo / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "miss-link").mkdir()
+        (skills_dir / "miss-link" / "SKILL.md").write_text("# m\n")
+        _setup_state(config.state_file, {"miss-link"})
+        _setup_agent_dirs(config.agent_dirs)
+
+        self._skip_agent_select(monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda _: next(iter(["", "y"])))
+
+        init_repo(config, config_path=cp)
+
+        output = capsys.readouterr().out
+        assert "agents" in output
+        assert "claude" in output
+
+    def test_preview_shows_summary_counts(self, tmp_path, monkeypatch, capsys):
+        """预览应包含汇总统计"""
+        config = _make_config(tmp_path)
+        cp = _config_path(tmp_path)
+
+        _setup_git_repo(config.repo)
+        skills_dir = config.repo / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "skill-x").mkdir()
+        (skills_dir / "skill-x" / "SKILL.md").write_text("# x\n")
+        _setup_state(config.state_file, {"skill-x"})
+        _setup_agent_dirs(config.agent_dirs)
+
+        self._skip_agent_select(monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda _: next(iter(["", "y"])))
+
+        init_repo(config, config_path=cp)
+
+        output = capsys.readouterr().out
+        assert "symlink" in output
+
+    def test_preview_dry_run_shows_details(self, tmp_path, capsys):
+        """dry_run 模式也应展示 symlink 详情"""
+        config = _make_config(tmp_path)
+
+        _setup_git_repo(config.repo)
+        skills_dir = config.repo / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "dr-skill").mkdir()
+        (skills_dir / "dr-skill" / "SKILL.md").write_text("# dr\n")
+        _setup_state(config.state_file, {"dr-skill"})
+
+        init_repo(config, auto_confirm=True, dry_run=True)
+
+        output = capsys.readouterr().out
+        assert "DRY-RUN" in output
+        assert "dr-skill" in output
+
+    def test_preview_mixed_statuses(self, tmp_path, monkeypatch, capsys):
+        """混合状态：部分已验证、部分需创建、部分需修复"""
+        config = _make_config(tmp_path)
+        cp = _config_path(tmp_path)
+
+        _setup_git_repo(config.repo)
+        skills_dir = config.repo / "skills"
+        skills_dir.mkdir()
+        # skill-ok: 已有完整 symlink
+        (skills_dir / "skill-ok").mkdir()
+        (skills_dir / "skill-ok" / "SKILL.md").write_text("# ok\n")
+        _setup_agent_dirs(config.agent_dirs)
+        for ad in config.agent_dirs:
+            (ad / "skill-ok").symlink_to(skills_dir / "skill-ok")
+        # skill-new: 无 symlink
+        (skills_dir / "skill-new").mkdir()
+        (skills_dir / "skill-new" / "SKILL.md").write_text("# new\n")
+        # skill-broken: 断链
+        (skills_dir / "skill-broken").mkdir()
+        (skills_dir / "skill-broken" / "SKILL.md").write_text("# brk\n")
+        (config.agent_dirs[0] / "skill-broken").symlink_to(tmp_path / "nowhere")
+
+        _setup_state(config.state_file, {"skill-ok", "skill-new", "skill-broken"})
+
+        self._skip_agent_select(monkeypatch)
+        monkeypatch.setattr("builtins.input", lambda _: next(iter(["", "y"])))
+
+        init_repo(config, config_path=cp)
+
+        output = capsys.readouterr().out
+        assert "✓" in output and "skill-ok" in output
+        assert "+" in output and "skill-new" in output
+        assert "!" in output and "skill-broken" in output
