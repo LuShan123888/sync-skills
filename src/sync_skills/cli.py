@@ -12,6 +12,7 @@ v1.1 — 基于 git + symlink + 状态文件管理用户自创建的 skill。
   sync-skills doctor            验证/修复异常状态
   sync-skills list              列出已管理 skill
   sync-skills status            显示 git 状态 + 管理状态
+  sync-skills commit            git add + commit
   sync-skills push              git commit + push
   sync-skills pull              git pull + 修复软链接
 
@@ -26,7 +27,15 @@ from pathlib import Path
 from . import __version__
 from .classification import classify_all_skills
 from .config import Config, _unexpand_home, load_config, save_config
-from .git_ops import git_add_commit, git_is_repo, git_pull, git_push, git_status
+from .git_ops import (
+    git_add_commit,
+    git_collect_skill_changes,
+    git_is_repo,
+    git_pull,
+    git_push,
+    git_recent_commits,
+    git_status,
+)
 from .lifecycle import add_skill, init_repo, link_skill, remove_skill, unlink_skill
 from .state import align_state_with_repo, get_managed_skills
 from .symlink import check_and_repair_links
@@ -255,6 +264,28 @@ def cmd_status(args):
             print(f"  ? {name}")
 
 
+def cmd_commit(args):
+    """git add + commit。执行前展示变更摘要和 git 命令让用户确认。"""
+    config = _load_config_or_default(args)
+    repo = config.repo
+
+    if not git_is_repo(repo):
+        print(f"[ERROR] {repo} 不是 git 仓库")
+        return
+
+    message = args.message or "update skills"
+    _show_git_preview(config, message, include_push=False)
+
+    if _get_dry_run(args):
+        print("\n[DRY-RUN] 以上命令不会执行")
+        return
+
+    if not _confirm_git_action(args):
+        return
+
+    _commit_repo(repo, message)
+
+
 def cmd_push(args):
     """git add + commit + push。执行前展示完整 git 命令让用户确认。"""
     config = _load_config_or_default(args)
@@ -267,55 +298,18 @@ def cmd_push(args):
     from .git_ops import git_get_remote_url, git_get_tracking_branch, git_has_remote
 
     message = args.message or "update skills"
-    status = git_status(repo)
-    branch = status.branch or "(未命名)"
-
-    # 展示将要执行的 git 命令
-    print("即将执行:")
-    print(f"  cd {_unexpand_home(repo)}")
-    print(f"  git add -A")
-    print(f"  git commit -m \"{message}\"")
-
     has_remote = git_has_remote(repo)
-    if has_remote:
-        tracking = git_get_tracking_branch(repo)
-        push_target = tracking.replace("origin/", "") if tracking else branch
-        print(f"  git push -u origin {push_target}")
-
-        # 展示分支状态
-        print(f"\n分支: {branch}")
-        if tracking:
-            print(f"追踪: {tracking}")
-        if status.ahead > 0:
-            print(f"领先远程: {status.ahead} 个 commit")
-        if status.behind > 0:
-            print(f"落后远程: {status.behind} 个 commit (建议先 sync-skills pull)")
-        print(f"远程: {git_get_remote_url(repo)}")
-    else:
-        print(f"\n[WARNING] 尚未配置远程仓库，将仅执行本地 commit")
+    _show_git_preview(config, message, include_push=has_remote)
 
     if _get_dry_run(args):
         print("\n[DRY-RUN] 以上命令不会执行")
         return
 
-    if not args.yes:
-        try:
-            confirm = input("\n确认执行? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("\n已取消")
-            return
-        if confirm != "y":
-            print("已取消")
-            return
+    if not _confirm_git_action(args):
+        return
 
-    # 执行 commit
-    if git_add_commit(repo, message):
-        print("[OK] 已提交")
-    else:
-        if not git_status(repo).is_clean:
-            print("[ERROR] 提交失败")
-            return
-        # 无变更，继续 push
+    if not _commit_repo(repo, message):
+        return
 
     # 执行 push
     if has_remote:
@@ -524,6 +518,85 @@ def _verify_after_change(config: Config):
         print("  建议执行 sync-skills doctor 检查并修复")
 
 
+def _show_git_preview(config: Config, message: str, include_push: bool):
+    """展示 commit/push 前的 git 风格预览。"""
+    from .git_ops import git_get_remote_url, git_get_tracking_branch, git_has_remote
+
+    repo = config.repo
+    status = git_status(repo)
+    branch = status.branch or "(未命名)"
+    skill_changes = git_collect_skill_changes(repo, config.repo_skills_dir)
+    recent_commits = git_recent_commits(repo)
+
+    print(f"分支: {branch}")
+    if status.ahead > 0:
+        print(f"领先远程: {status.ahead} 个 commit")
+    if status.behind > 0:
+        print(f"落后远程: {status.behind} 个 commit")
+
+    if skill_changes:
+        print("\n待提交 Skill:")
+        for change in skill_changes:
+            print(f"  {change.status} {change.skill_name:<24} {change.modified_at}")
+    else:
+        suffix = "，可能只有非 skill 文件变更" if not status.is_clean else ""
+        print(f"\n待提交 Skill: 无{suffix}")
+
+    if recent_commits:
+        print("\n最近 commit:")
+        for commit in recent_commits:
+            print(f"  {commit.short_hash} {commit.committed_at} {commit.subject}")
+
+    print("\n即将执行:")
+    print(f"  cd {_unexpand_home(repo)}")
+    print("  git add -A")
+    print(f"  git commit -m \"{message}\"")
+
+    if include_push:
+        tracking = git_get_tracking_branch(repo)
+        push_target = tracking.replace("origin/", "") if tracking else branch
+        print(f"  git push -u origin {push_target}")
+        if tracking:
+            print(f"\n追踪: {tracking}")
+        if status.behind > 0:
+            print("建议: 当前分支落后远程，优先执行 sync-skills pull")
+        print(f"远程: {git_get_remote_url(repo)}")
+    elif git_has_remote(repo):
+        print("\n提示: 已检测到远程仓库，提交后可继续执行 sync-skills push")
+
+
+def _confirm_git_action(args) -> bool:
+    """统一处理 commit/push 前确认。"""
+    if args.yes:
+        return True
+
+    try:
+        confirm = input("\n确认执行? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\n已取消")
+        return False
+
+    if confirm != "y":
+        print("已取消")
+        return False
+    return True
+
+
+def _commit_repo(repo: Path, message: str) -> bool:
+    """执行 commit，并统一输出结果。"""
+    status = git_status(repo)
+    if status.is_clean:
+        print("[OK] 无变更，跳过 commit")
+        return True
+
+    if not git_add_commit(repo, message):
+        print("[ERROR] 提交失败")
+        return False
+
+    print("[OK] 已提交")
+    return True
+
+
 
 # ============================================================
 # 参数解析
@@ -544,6 +617,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  sync-skills doctor              verify/repair symlinks\n"
             "  sync-skills list                list managed skills\n"
             "  sync-skills status              show git + management status\n"
+            "  sync-skills commit -m 'update'  commit only\n"
             "  sync-skills push -m 'update'    commit and push\n"
             "  sync-skills pull                pull and rebuild links\n"
             "  sync-skills --copy              legacy copy-based sync\n"
@@ -604,6 +678,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # status
     sub_status = subparsers.add_parser("status", help="show git + management status")
     sub_status.add_argument("--config", type=Path, default=None)
+
+    # commit
+    sub_commit = subparsers.add_parser("commit", help="git add and commit")
+    sub_commit.add_argument("--message", "-m", default="", help="commit message")
+    sub_commit.add_argument("--config", type=Path, default=None)
+    sub_commit.add_argument("--dry-run", action="store_true", dest="dry_run")
+    sub_commit.add_argument("-y", "--yes", action="store_true")
 
     # push
     sub_push = subparsers.add_parser("push", help="git commit and push")
@@ -678,6 +759,7 @@ def main(argv: list[str] | None = None):
         "remove": cmd_remove,
         "list": cmd_list,
         "status": cmd_status,
+        "commit": cmd_commit,
         "push": cmd_push,
         "pull": cmd_pull,
         "doctor": cmd_doctor,

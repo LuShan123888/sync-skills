@@ -6,6 +6,7 @@
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 
@@ -24,6 +25,23 @@ class GitStatus:
     untracked: list[str] = field(default_factory=list)
     ahead: int = 0
     behind: int = 0
+
+
+@dataclass
+class GitSkillChange:
+    """当前工作区中的 skill 变更摘要。"""
+    status: str
+    skill_name: str
+    modified_at: str
+    paths: list[str] = field(default_factory=list)
+
+
+@dataclass
+class GitCommitSummary:
+    """最近的 commit 摘要。"""
+    short_hash: str
+    committed_at: str
+    subject: str
 
 
 # ============================================================
@@ -114,6 +132,83 @@ def git_status(repo_path: Path) -> GitStatus:
         ahead=ahead,
         behind=behind,
     )
+
+
+def git_collect_skill_changes(repo_path: Path, repo_skills_dir: Path) -> list[GitSkillChange]:
+    """收集当前工作区涉及的 skill 变更，并附带最近修改时间。"""
+    if not git_is_repo(repo_path):
+        return []
+
+    result = _run_git(repo_path, "status", "--porcelain", check=False)
+    if result.returncode != 0:
+        return []
+
+    skill_paths: dict[str, list[str]] = {}
+    skill_statuses: dict[str, set[str]] = {}
+    skills_dir_name = repo_skills_dir.relative_to(repo_path).parts[0]
+
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+
+        status_code = line[:2]
+        filepath = line[3:]
+        if " -> " in filepath:
+            filepath = filepath.split(" -> ", 1)[1]
+
+        parts = Path(filepath).parts
+        if len(parts) < 2 or parts[0] != skills_dir_name:
+            continue
+
+        skill_name = parts[1]
+        skill_paths.setdefault(skill_name, []).append(filepath)
+        skill_statuses.setdefault(skill_name, set()).update(_extract_status_tokens(status_code))
+
+    changes = []
+    for skill_name in sorted(skill_paths):
+        skill_path = repo_skills_dir / skill_name
+        changes.append(
+            GitSkillChange(
+                status=_summarize_skill_status(skill_statuses.get(skill_name, set())),
+                skill_name=skill_name,
+                modified_at=_format_skill_modified_at(skill_path),
+                paths=sorted(skill_paths[skill_name]),
+            )
+        )
+    return changes
+
+
+def git_recent_commits(repo_path: Path, limit: int = 3) -> list[GitCommitSummary]:
+    """获取最近几条 commit，便于 push 前预览。"""
+    if not git_is_repo(repo_path):
+        return []
+
+    result = _run_git(
+        repo_path,
+        "log",
+        f"-{limit}",
+        "--date=format:%Y-%m-%d %H:%M",
+        "--pretty=format:%h%x09%ad%x09%s",
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+
+    commits = []
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        parts = line.split("\t", 2)
+        if len(parts) != 3:
+            continue
+        commits.append(
+            GitCommitSummary(
+                short_hash=parts[0],
+                committed_at=parts[1],
+                subject=parts[2],
+            )
+        )
+    return commits
 
 
 def git_add_commit(repo_path: Path, message: str) -> bool:
@@ -225,3 +320,39 @@ def git_get_tracking_branch(repo_path: Path) -> str:
     if result.returncode == 0:
         return result.stdout.strip()
     return ""
+
+
+def _extract_status_tokens(status_code: str) -> set[str]:
+    """从 porcelain 状态中提取有效状态标记。"""
+    if status_code == "??":
+        return {"?"}
+    return {ch for ch in status_code if ch.strip()}
+
+
+def _summarize_skill_status(statuses: set[str]) -> str:
+    """将多个文件状态压缩成单个 skill 状态。"""
+    if "?" in statuses:
+        return "A"
+    if statuses and statuses <= {"A"}:
+        return "A"
+    if statuses and statuses <= {"D"}:
+        return "D"
+    if "R" in statuses:
+        return "R"
+    return "M"
+
+
+def _format_skill_modified_at(skill_path: Path) -> str:
+    """格式化 skill 最近修改时间。删除场景下返回占位符。"""
+    if not skill_path.exists():
+        return "-"
+
+    latest_mtime = skill_path.stat().st_mtime
+    for path in skill_path.rglob("*"):
+        try:
+            path_mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if path_mtime > latest_mtime:
+            latest_mtime = path_mtime
+    return datetime.fromtimestamp(latest_mtime).strftime("%Y-%m-%d %H:%M")

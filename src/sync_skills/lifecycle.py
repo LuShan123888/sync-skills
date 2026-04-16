@@ -663,7 +663,10 @@ def _select_agents(config: Config) -> None:
         config.agent_dirs = [detected[i][1] for i in indices if 0 <= i < len(detected)]
     else:
         # 直接回车，保持当前选择
-        config.agent_dirs = [d for _, d in detected]
+        if config.agent_dirs:
+            config.agent_dirs = list(config.agent_dirs)
+        else:
+            config.agent_dirs = [d for _, d in detected]
 
 
 def _confirm_repo_path(config: Config) -> None:

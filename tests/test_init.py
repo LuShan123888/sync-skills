@@ -273,6 +273,23 @@ class TestInitAutoConfirm:
         assert not (config.repo / ".git").exists()
 
 
+class TestInitAgentSelection:
+    """init 过程中 Agent 选择行为"""
+
+    def test_select_agents_blank_keeps_current_config(self, tmp_path, monkeypatch):
+        """直接回车应保持当前配置，不应扩展到真实 HOME 下的默认目录"""
+        config = _make_config(tmp_path)
+        original_agent_dirs = list(config.agent_dirs)
+
+        from sync_skills.lifecycle import _select_agents
+
+        monkeypatch.setattr("builtins.input", lambda _: "")
+        _select_agents(config)
+
+        assert config.agent_dirs == original_agent_dirs
+        assert all(tmp_path in path.parents for path in config.agent_dirs)
+
+
 class TestInitPreviewSymlinkDetails:
     """init 预览展示具体 symlink 详情"""
 

@@ -102,6 +102,9 @@ sync-skills link my-skill
 # 提交并推送（展示完整 git 命令） / Git commit + push (shows full git commands)
 sync-skills push
 
+# 仅提交（展示变更 skill、时间、最近 commit） / Git commit only
+sync-skills commit
+
 # 拉取远程更新（展示完整 git 命令） / Git pull (shows full git commands)
 sync-skills pull
 
@@ -152,14 +155,15 @@ sync-skills unlink my-skill
 
 1. **init** -- 初始化 `~/Skills/` git 仓库（可选 git clone 远程仓库），自动注册所有 repo 中的 skill，建立/修复 symlink
 2. **link** -- 按名称自动扫描 Skill（复制到 git 仓库 + 删除其他副本 + 创建 symlink），多版本时 MD5 分组 + mtime 排序让用户选择
-3. **push** -- 展示完整 git 命令（`git add`/`commit`/`push`）+ 用户确认后执行
-4. **pull** -- 展示完整 git 命令（`git pull --rebase`）+ 用户确认后执行 + 修复 symlink
-5. **doctor** -- 验证所有 symlink，自动修复断裂链接，检测状态不一致
-6. **list** -- 列出所有自定义 Skill
-7. **status** -- 显示 git 状态 + skill 管理状态 + 断链检测
-8. **new** -- 在 `~/Skills/skills/` 中创建 Skill 骨架，建立 symlink
-9. **remove** -- 彻底删除 Skill（git 仓库中的文件 + 所有 symlink）
-10. **unlink** -- 移除 Skill 管理（还原文件到所有 Agent 目录，保留数据）
+3. **commit** -- 展示变更 skill、修改时间、最近 commit，以及 `git add`/`commit` 预览，确认后执行
+4. **push** -- 展示完整 git 命令（`git add`/`commit`/`push`）+ 用户确认后执行
+5. **pull** -- 展示完整 git 命令（`git pull --rebase`）+ 用户确认后执行 + 修复 symlink
+6. **doctor** -- 验证所有 symlink，自动修复断裂链接，检测状态不一致
+7. **list** -- 列出所有自定义 Skill
+8. **status** -- 显示 git 状态 + skill 管理状态 + 断链检测
+9. **new** -- 在 `~/Skills/skills/` 中创建 Skill 骨架，建立 symlink
+10. **remove** -- 彻底删除 Skill（git 仓库中的文件 + 所有 symlink）
+11. **unlink** -- 移除 Skill 管理（还原文件到所有 Agent 目录，保留数据）
 
 ---
 
@@ -195,6 +199,7 @@ sync-skills unlink my-skill
 |------|------|
 | `sync-skills init` | 初始化 ~/Skills/ 仓库（可重复执行；有远程仓库时自动 clone 并注册所有 skill） |
 | `sync-skills link <name>` | 纳入 Skill（按名称自动扫描，多版本时让用户选择，-y 跳过确认） |
+| `sync-skills commit [-m MSG]` | git add + commit（预览变更 skill、时间、最近 commit，确认后执行） |
 | `sync-skills push [-m MSG]` | git commit + push（展示完整 git 命令，确认后执行） |
 | `sync-skills pull` | git pull（展示完整 git 命令，确认后执行）+ 修复 symlinks |
 | `sync-skills doctor` | 验证/修复 symlink + 检测状态不一致 |
