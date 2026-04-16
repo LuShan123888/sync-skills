@@ -2208,7 +2208,7 @@ class TestPushCommand:
     """测试 sync-skills push 命令"""
 
     def test_push_commits_and_shows_branch_info(self, tmp_path, capsys, monkeypatch):
-        """push 应显示分支、待提交 skill 和最近 commit 让用户确认"""
+        """push 未传 message 时应生成包含 skill 名和时间的默认消息"""
         repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill
         from sync_skills.git_ops import git_init
@@ -2226,16 +2226,15 @@ class TestPushCommand:
         # mock input 模拟用户取消推送
         monkeypatch.setattr("builtins.input", lambda _: "n")
 
-        args = argparse.Namespace(message="test", config=config_path, dry_run=False, yes=False)
+        args = argparse.Namespace(message="", config=config_path, dry_run=False, yes=False)
         cmd_push(args)
         captured = capsys.readouterr()
 
-        # 应显示分支信息
         assert "分支" in captured.out
         assert "待提交 Skill" in captured.out
         assert "my-skill" in captured.out
         assert "最近 commit" in captured.out
-        # 用户取消
+        assert 'git commit -m "update: my-skill (' in captured.out
         assert "已取消" in captured.out
 
 
@@ -2243,7 +2242,7 @@ class TestCommitCommand:
     """测试 sync-skills commit 命令"""
 
     def test_commit_shows_preview_and_can_cancel(self, tmp_path, capsys, monkeypatch):
-        """commit 应显示摘要并支持取消"""
+        """commit 未传 message 时应生成包含 skill 名和时间的默认消息"""
         repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.lifecycle import add_skill
         from sync_skills.git_ops import git_init
@@ -2260,14 +2259,14 @@ class TestCommitCommand:
 
         monkeypatch.setattr("builtins.input", lambda _: "n")
 
-        args = argparse.Namespace(message="preview", config=config_path, dry_run=False, yes=False)
+        args = argparse.Namespace(message="", config=config_path, dry_run=False, yes=False)
         cmd_commit(args)
         captured = capsys.readouterr()
 
         assert "待提交 Skill" in captured.out
         assert "commit-skill" in captured.out
         assert "最近 commit" in captured.out
-        assert 'git commit -m "preview"' in captured.out
+        assert 'git commit -m "update: commit-skill (' in captured.out
         assert "已取消" in captured.out
 
 

@@ -22,6 +22,7 @@ v1.1 — 基于 git + symlink + 状态文件管理用户自创建的 skill。
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from . import __version__
@@ -273,7 +274,7 @@ def cmd_commit(args):
         print(f"[ERROR] {repo} 不是 git 仓库")
         return
 
-    message = args.message or "update skills"
+    message = args.message or _build_default_git_message(config)
     _show_git_preview(config, message, include_push=False)
 
     if _get_dry_run(args):
@@ -297,7 +298,7 @@ def cmd_push(args):
 
     from .git_ops import git_get_remote_url, git_get_tracking_branch, git_has_remote
 
-    message = args.message or "update skills"
+    message = args.message or _build_default_git_message(config)
     has_remote = git_has_remote(repo)
     _show_git_preview(config, message, include_push=has_remote)
 
@@ -563,6 +564,21 @@ def _show_git_preview(config: Config, message: str, include_push: bool):
         print(f"远程: {git_get_remote_url(repo)}")
     elif git_has_remote(repo):
         print("\n提示: 已检测到远程仓库，提交后可继续执行 sync-skills push")
+
+
+def _build_default_git_message(config: Config) -> str:
+    """根据当前变更生成默认 commit message。"""
+    skill_changes = git_collect_skill_changes(config.repo, config.repo_skills_dir)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    if len(skill_changes) == 1:
+        skill_part = skill_changes[0].skill_name
+    elif len(skill_changes) > 1:
+        skill_part = f"{len(skill_changes)} skills"
+    else:
+        skill_part = "workspace"
+
+    return f"update: {skill_part} ({timestamp})"
 
 
 def _confirm_git_action(args) -> bool:
