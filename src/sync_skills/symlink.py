@@ -324,8 +324,12 @@ def check_and_repair_links(
                 continue
 
             if not link.is_symlink():
-                # 存在真实目录 → 冲突
-                conflicts.append(f"{name}: {agent_name} 存在真实目录（非 symlink），跳过")
+                # 存在真实目录 → 冲突，非 -y 模式下让用户选择是否替换
+                success, status = safe_create_link(name, repo_skills_dir, agent_dir, auto_confirm)
+                if success:
+                    repaired.append(f"{name}: {agent_name} 存在真实目录（非 symlink）→ 已替换")
+                elif status == "conflict":
+                    conflicts.append(f"{name}: {agent_name} 存在真实目录（非 symlink），跳过")
                 continue
 
             # 是 symlink，检查状态

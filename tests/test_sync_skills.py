@@ -875,6 +875,38 @@ class TestUserScenarios:
         # skill-a 不受影响
         assert (target_a / "skill-a" / "SKILL.md").is_file()
 
+    def test_s10_empty_source_bidirectional_collects_target_skills_to_other(self, env):
+        """S10: 源目录为空时，双向模式应收集目标中的 skill 到 Other 并分发到其他目标"""
+        source, target_a, target_b = env
+        create_skill(target_a, "only-a", "from a")
+        create_skill(target_b, "only-b", "from b")
+
+        run_main(source, [target_a, target_b])
+
+        assert (source / "Other" / "only-a" / "SKILL.md").read_text() == "from a"
+        assert (source / "Other" / "only-b" / "SKILL.md").read_text() == "from b"
+        assert (target_a / "only-b" / "SKILL.md").read_text() == "from b"
+        assert (target_b / "only-a" / "SKILL.md").read_text() == "from a"
+
+    def test_s11_nonexistent_target_is_reported_but_not_created_yet(self, tmp_path, capsys):
+        """S11 当前仍是缺口：不存在的目标会被显示为 ✓，但不会真正创建目录"""
+        source = tmp_path / "source"
+        target_a = tmp_path / "target_a"
+        target_b = tmp_path / "target_b"
+        source.mkdir()
+        target_a.mkdir()
+
+        create_skill_in_category(source, "Code", "skill-a", "same")
+
+        run_main(source, [target_a, target_b])
+        output = capsys.readouterr()
+
+        assert not target_b.exists()
+        assert (target_a / "skill-a" / "SKILL.md").read_text() == "same"
+        assert f"{target_b}  " in output.out
+        assert "✓" in output.out
+        assert not (target_b / "skill-a").exists()
+
     def test_s12_all_in_sync(self, env, capsys):
         """S12: 所有目录内容一致 → 无操作"""
         source, target_a, target_b = env
@@ -888,6 +920,19 @@ class TestUserScenarios:
         run_main(source, [target_a, target_b])
         output = capsys.readouterr()
         assert "无需同步" in output.err
+
+    def test_s13_only_missing_target_receives_sync_op(self, env):
+        """S13: 多目标独立性，只有缺失的目标应收到同步操作"""
+        source, target_a, target_b = env
+        create_skill_in_category(source, "Code", "skill-a", "same")
+        create_skill(target_a, "skill-a", "same")
+
+        plan = preview_bidirectional(source, [target_a, target_b])
+        ops = [op for op in plan.sync_ops if op.skill_name == "skill-a"]
+
+        assert len(ops) == 1
+        assert ops[0].origin_dir == source
+        assert ops[0].dest_dir == target_b
 
 
 # ============================================================
@@ -2342,6 +2387,57 @@ class TestDoctorCommand:
         from sync_skills.state import get_managed_skills
         managed = get_managed_skills(config.state_file)
         assert "unregistered" in managed
+
+    def test_doctor_requires_confirmation(self, tmp_path, capsys, monkeypatch):
+        """doctor 在非 -y 模式下应先确认，取消后不执行任何修复"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
+        from sync_skills.config import save_config
+
+        (repo_skills / "unregistered").mkdir()
+        (repo_skills / "unregistered" / "SKILL.md").write_text("# unregistered\n")
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        cmd_doctor(self._make_args(config_path))
+        captured = capsys.readouterr()
+
+        assert "已取消" in captured.out
+
+        from sync_skills.state import get_managed_skills
+        managed = get_managed_skills(config.state_file)
+        assert "unregistered" not in managed
+
+    def test_doctor_conflict_prompts_for_choice(self, tmp_path, capsys, monkeypatch):
+        """doctor 在非 -y 模式下遇到真实目录冲突应询问是否替换"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
+        from sync_skills.config import save_config
+        from sync_skills.lifecycle import add_skill
+
+        add_skill("test-skill", config)
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        (agent_dirs[0] / "test-skill").unlink()
+        (agent_dirs[0] / "test-skill").mkdir()
+        (agent_dirs[0] / "test-skill" / "SKILL.md").write_text("# different\n")
+
+        answers = iter(["y", "y"])
+        monkeypatch.setattr("builtins.input", lambda _: next(answers))
+        cmd_doctor(self._make_args(config_path))
+        captured = capsys.readouterr()
+
+        assert "已替换" in captured.out
+        assert (agent_dirs[0] / "test-skill").is_symlink()
+        assert (agent_dirs[0] / "test-skill").resolve() == (repo_skills / "test-skill").resolve()
+
+        assert "冲突" not in captured.out
+        assert "跳过" not in captured.out
+
 
     def test_doctor_detects_orphaned_skills(self, tmp_path, capsys):
         """状态文件中有但 repo 中没有的 skill 应报告为 orphaned"""

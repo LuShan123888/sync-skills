@@ -395,6 +395,17 @@ def cmd_pull(args):
 def cmd_doctor(args):
     """验证/修复软链接和状态一致性。"""
     config = _load_config_or_default(args)
+
+    if not _get_dry_run(args) and not args.yes:
+        try:
+            confirm = input("\n确认执行? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n已取消")
+            return
+        if confirm != "y":
+            print("已取消")
+            return
+
     _do_doctor(config, auto_confirm=args.yes)
 
 
