@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sync-skills"
-version = "0.5.20260418.1"
+version = "0.5.20260418.2"
 description = "自定义 Skill 生命周期管理器 — 基于 git + symlink 管理 AI coding agent skills"
 readme = "README.md"
 license = "MIT"
