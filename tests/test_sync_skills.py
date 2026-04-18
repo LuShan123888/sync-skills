@@ -1992,7 +1992,7 @@ class TestAutoCommit:
         from sync_skills.lifecycle import add_skill
 
         self._setup_git(repo)
-        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m, repo_skills_dir=None: True)
 
         add_skill("commit-skill", config)
 
@@ -2008,7 +2008,7 @@ class TestAutoCommit:
         self._setup_git(repo)
         add_skill("rm-skill", config)
 
-        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m, repo_skills_dir=None: True)
         remove_skill("rm-skill", config, auto_confirm=True)
 
         output = capsys.readouterr().out
@@ -2025,7 +2025,7 @@ class TestAutoCommit:
         skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text("# link\n")
 
-        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m, repo_skills_dir=None: True)
         link_skill("link-skill", config, auto_confirm=True)
 
         output = capsys.readouterr().out
@@ -2040,7 +2040,7 @@ class TestAutoCommit:
         self._setup_git(repo)
         add_skill("ul-skill", config)
 
-        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m, repo_skills_dir=None: True)
         unlink_skill(["ul-skill"], config, auto_confirm=True)
 
         output = capsys.readouterr().out
@@ -2057,7 +2057,7 @@ class TestAutoCommit:
         add_skill("s2", config)
         add_skill("s3", config)
 
-        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m, repo_skills_dir=None: True)
         unlink_skill(["--all"], config, auto_confirm=True)
 
         output = capsys.readouterr().out
@@ -2073,7 +2073,7 @@ class TestAutoCommit:
         add_skill("ma", config)
         add_skill("mb", config)
 
-        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m, repo_skills_dir=None: True)
         unlink_skill(["ma", "mb"], config, auto_confirm=True)
 
         output = capsys.readouterr().out
@@ -2086,7 +2086,7 @@ class TestAutoCommit:
         from sync_skills.lifecycle import add_skill
 
         self._setup_git(repo)
-        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: True)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m, repo_skills_dir=None: True)
 
         add_skill("ts-skill", config)
 
@@ -2101,7 +2101,7 @@ class TestAutoCommit:
         from sync_skills.lifecycle import add_skill
 
         self._setup_git(repo)
-        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m: False)
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda r, m, repo_skills_dir=None: False)
 
         add_skill("no-commit-skill", config)
 
@@ -2116,7 +2116,7 @@ class TestAutoCommit:
         self._setup_git(repo)
         committed = []
         monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
-                            lambda r, m: committed.append(m) or True)
+                            lambda r, m, repo_skills_dir=None: committed.append(m) or True)
 
         add_skill("dry-skill", config, dry_run=True)
 
@@ -2130,11 +2130,11 @@ class TestAutoCommit:
         self._setup_git(repo)
         committed = []
         monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
-                            lambda r, m: committed.append(m) or True)
+                            lambda r, m, repo_skills_dir=None: committed.append(m) or True)
 
         # 用 mock add 来避免真实 git commit
         monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
-                            lambda r, m: committed.append(m) or True)
+                            lambda r, m, repo_skills_dir=None: committed.append(m) or True)
         add_skill("dry-rm", config)
         # 清空记录，只跟踪 remove 的调用
         committed.clear()
@@ -2155,7 +2155,7 @@ class TestAutoCommit:
 
         committed = []
         monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
-                            lambda r, m: committed.append(m) or True)
+                            lambda r, m, repo_skills_dir=None: committed.append(m) or True)
 
         link_skill("dry-link", config, auto_confirm=True, dry_run=True)
 
@@ -2169,7 +2169,7 @@ class TestAutoCommit:
         self._setup_git(repo)
         committed = []
         monkeypatch.setattr("sync_skills.lifecycle.git_add_commit",
-                            lambda r, m: committed.append(m) or True)
+                            lambda r, m, repo_skills_dir=None: committed.append(m) or True)
 
         add_skill("dry-ul", config)
         committed.clear()

@@ -9,6 +9,44 @@ from sync_skills.state import get_managed_skills
 from tests.test_sync_skills import _create_v1_env
 
 
+def write_skill(skill_dir: Path, version: str | None, body: str = "# demo\n"):
+    if version is None:
+        content = f"---\nname: {skill_dir.name}\ndescription: \"demo\"\n---\n\n{body}"
+    else:
+        content = f"---\nname: {skill_dir.name}\nversion: {version}\ndescription: \"demo\"\n---\n\n{body}"
+    (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+    return content
+
+
+def read_version(skill_dir: Path) -> str | None:
+    content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    for line in content.splitlines():
+        if line.startswith("version: "):
+            return line.split(": ", 1)[1].strip()
+    return None
+
+
+def init_git_identity(repo: Path):
+    import subprocess
+
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@test.com"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], capture_output=True, check=True)
+
+
+def commit_all(repo: Path, message: str):
+    import subprocess
+
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], capture_output=True, check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", message], capture_output=True, check=True)
+
+
+def current_head_message(repo: Path) -> str:
+    import subprocess
+
+    result = subprocess.run(["git", "-C", str(repo), "log", "--oneline", "-1"], capture_output=True, text=True, check=True)
+    return result.stdout
+
+
 def make_args(config_path: Path, *, yes=False, dry_run=False, message=""):
     return argparse.Namespace(config=config_path, dry_run=dry_run, yes=yes, message=message)
 
@@ -79,13 +117,13 @@ class TestV1CommitCommand:
         monkeypatch.setattr("sync_skills.cli.git_collect_skill_changes", lambda repo, repo_skills_dir: [GitSkillChange("M", "demo", "2026-04-19 10:00")])
         monkeypatch.setattr("sync_skills.cli.git_recent_commits", lambda repo: [])
         monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="main", is_clean=False))
-        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message: called.append(message) or True)
+        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message, repo_skills_dir=None: called.append((message, repo_skills_dir)) or True)
         monkeypatch.setattr("sync_skills.cli.datetime", SimpleNamespace(now=lambda: SimpleNamespace(strftime=lambda fmt: "2026-04-19 12:34")))
 
         cmd_commit(make_args(config_path, yes=True))
         captured = capsys.readouterr()
 
-        assert called == ["update: demo (2026-04-19 12:34)"]
+        assert called == [("update: demo (2026-04-19 12:34)", config.repo_skills_dir)]
         assert "[OK] 已提交" in captured.out
 
     def test_commit_dry_run_does_not_call_git_add_commit(self, tmp_path, capsys, monkeypatch):
@@ -101,13 +139,96 @@ class TestV1CommitCommand:
         monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="main", is_clean=False))
 
         called = []
-        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message: called.append(message) or True)
+        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message, repo_skills_dir=None: called.append(message) or True)
 
         cmd_commit(make_args(config_path, dry_run=True))
         captured = capsys.readouterr()
 
         assert called == []
         assert "[DRY-RUN]" in captured.out
+
+    def test_commit_bumps_patch_when_version_unchanged(self, tmp_path, capsys):
+        from sync_skills.cli import cmd_commit
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        init_git_identity(repo)
+
+        skill_dir = repo_skills / "demo"
+        skill_dir.mkdir(parents=True)
+        write_skill(skill_dir, "1.2.3", "# demo\n")
+        commit_all(repo, "init")
+
+        write_skill(skill_dir, "1.2.3", "# demo\n\nchanged\n")
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        cmd_commit(make_args(config_path, yes=True, message="update demo"))
+        captured = capsys.readouterr()
+
+        assert read_version(skill_dir) == "1.2.4"
+        assert "[OK] 已提交" in captured.out
+        assert "update demo" in current_head_message(repo)
+
+    def test_commit_keeps_manually_updated_version(self, tmp_path):
+        from sync_skills.cli import cmd_commit
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        init_git_identity(repo)
+
+        skill_dir = repo_skills / "demo"
+        skill_dir.mkdir(parents=True)
+        write_skill(skill_dir, "1.2.3", "# demo\n")
+        commit_all(repo, "init")
+
+        write_skill(skill_dir, "1.3.0", "# demo\n\nchanged\n")
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        cmd_commit(make_args(config_path, yes=True, message="update demo"))
+
+        assert read_version(skill_dir) == "1.3.0"
+
+    def test_commit_sets_default_version_when_missing(self, tmp_path):
+        from sync_skills.cli import cmd_commit
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        init_git_identity(repo)
+
+        skill_dir = repo_skills / "demo"
+        skill_dir.mkdir(parents=True)
+        write_skill(skill_dir, None, "# demo\n\nchanged\n")
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        cmd_commit(make_args(config_path, yes=True, message="update demo"))
+
+        assert read_version(skill_dir) == "0.0.1"
+
+    def test_commit_bumps_each_skill_in_multi_skill_commit(self, tmp_path):
+        from sync_skills.cli import cmd_commit
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        init_git_identity(repo)
+
+        for name in ["a", "b"]:
+            skill_dir = repo_skills / name
+            skill_dir.mkdir(parents=True)
+            write_skill(skill_dir, "1.0.0", f"# {name}\n")
+        commit_all(repo, "init")
+
+        write_skill(repo_skills / "a", "1.0.0", "# a\n\nchanged\n")
+        write_skill(repo_skills / "b", "1.0.0", "# b\n\nchanged\n")
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        cmd_commit(make_args(config_path, yes=True, message="update both"))
+
+        assert read_version(repo_skills / "a") == "1.0.1"
+        assert read_version(repo_skills / "b") == "1.0.1"
 
 
 class TestV1PushCommand:
@@ -129,7 +250,7 @@ class TestV1PushCommand:
 
         committed = []
         pushed = []
-        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message: committed.append(message) or True)
+        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message, repo_skills_dir=None: committed.append(message) or True)
         monkeypatch.setattr("sync_skills.cli.git_push", lambda repo: pushed.append(repo) or (True, ""))
         monkeypatch.setattr("sync_skills.cli.datetime", SimpleNamespace(now=lambda: SimpleNamespace(strftime=lambda fmt: "2026-04-19 12:34")))
 
@@ -158,7 +279,7 @@ class TestV1PushCommand:
 
         committed = []
         pushed = []
-        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message: committed.append(message) or True)
+        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message, repo_skills_dir=None: committed.append(message) or True)
         monkeypatch.setattr("sync_skills.cli.git_push", lambda repo: pushed.append(repo) or (True, ""))
 
         cmd_push(make_args(config_path, dry_run=True))
@@ -167,6 +288,34 @@ class TestV1PushCommand:
         assert committed == []
         assert pushed == []
         assert "[DRY-RUN]" in captured.out
+
+    def test_push_bumps_patch_before_push(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_push
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        init_git_identity(repo)
+
+        skill_dir = repo_skills / "demo"
+        skill_dir.mkdir(parents=True)
+        write_skill(skill_dir, "1.2.3", "# demo\n")
+        commit_all(repo, "init")
+        write_skill(skill_dir, "1.2.3", "# demo\n\nchanged\n")
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        import sync_skills.git_ops as git_ops_module
+        monkeypatch.setattr(git_ops_module, "git_has_remote", lambda repo: True)
+        monkeypatch.setattr(git_ops_module, "git_get_tracking_branch", lambda repo: "origin/main")
+        monkeypatch.setattr(git_ops_module, "git_get_remote_url", lambda repo: "git@example.com:repo.git")
+        monkeypatch.setattr("sync_skills.cli.git_push", lambda repo: (True, ""))
+
+        cmd_push(make_args(config_path, yes=True, message="push demo"))
+        captured = capsys.readouterr()
+
+        assert read_version(skill_dir) == "1.2.4"
+        assert "[OK] 已推送到远程" in captured.out
 
 
 class TestV1PullCommand:
@@ -215,3 +364,25 @@ class TestV1PullCommand:
         assert pulled == []
         assert repaired == []
         assert "[DRY-RUN]" in captured.out
+
+
+class TestV1AutoCommitVersion:
+    def test_new_skill_defaults_to_version_0_0_1(self, tmp_path):
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+
+        add_skill("demo", config)
+
+        assert read_version(repo_skills / "demo") == "0.0.1"
+
+    def test_add_auto_commit_passes_repo_skills_dir(self, tmp_path, monkeypatch, capsys):
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+
+        called = []
+        monkeypatch.setattr("sync_skills.lifecycle.git_add_commit", lambda repo, message, repo_skills_dir=None: called.append((message, repo_skills_dir)) or True)
+
+        add_skill("demo", config)
+        captured = capsys.readouterr()
+
+        assert called == [(called[0][0], config.repo_skills_dir)]
+        assert called[0][0].startswith("add: demo (")
+        assert "[git]" in captured.out

@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .skill_version import ensure_skill_version_bumped
+
 
 # ============================================================
 # 数据结构
@@ -157,6 +159,15 @@ def git_collect_skill_changes(repo_path: Path, repo_skills_dir: Path) -> list[Gi
             filepath = filepath.split(" -> ", 1)[1]
 
         parts = Path(filepath).parts
+        if parts and parts[0] == skills_dir_name and len(parts) == 1:
+            if repo_skills_dir.is_dir():
+                for skill_dir in repo_skills_dir.iterdir():
+                    if skill_dir.is_dir() and (skill_dir / "SKILL.md").is_file():
+                        skill_name = skill_dir.name
+                        skill_paths.setdefault(skill_name, []).append(f"{skills_dir_name}/{skill_name}/SKILL.md")
+                        skill_statuses.setdefault(skill_name, set()).update(_extract_status_tokens(status_code))
+            continue
+
         if len(parts) < 2 or parts[0] != skills_dir_name:
             continue
 
@@ -211,12 +222,16 @@ def git_recent_commits(repo_path: Path, limit: int = 3) -> list[GitCommitSummary
     return commits
 
 
-def git_add_commit(repo_path: Path, message: str) -> bool:
+def git_add_commit(repo_path: Path, message: str, repo_skills_dir: Path | None = None) -> bool:
     """git add -A + commit。"""
     # 先检查是否有变更
     status = git_status(repo_path)
     if status.is_clean:
         return True  # 无变更，跳过
+
+    if repo_skills_dir is not None:
+        for change in git_collect_skill_changes(repo_path, repo_skills_dir):
+            ensure_skill_version_bumped(repo_path, repo_skills_dir, change.skill_name)
 
     add_result = _run_git(repo_path, "add", "-A")
     if add_result.returncode != 0:

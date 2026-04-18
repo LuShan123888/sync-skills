@@ -284,7 +284,7 @@ def cmd_commit(args):
     if not _confirm_git_action(args):
         return
 
-    _commit_repo(repo, message)
+    _commit_repo(config, message)
 
 
 def cmd_push(args):
@@ -309,7 +309,7 @@ def cmd_push(args):
     if not _confirm_git_action(args):
         return
 
-    if not _commit_repo(repo, message):
+    if not _commit_repo(config, message):
         return
 
     # 执行 push
@@ -609,14 +609,15 @@ def _confirm_git_action(args) -> bool:
     return True
 
 
-def _commit_repo(repo: Path, message: str) -> bool:
+def _commit_repo(config: Config, message: str) -> bool:
     """执行 commit，并统一输出结果。"""
+    repo = config.repo
     status = git_status(repo)
     if status.is_clean:
         print("[OK] 无变更，跳过 commit")
         return True
 
-    if not git_add_commit(repo, message):
+    if not git_add_commit(repo, message, config.repo_skills_dir):
         print("[ERROR] 提交失败")
         return False
 

@@ -88,7 +88,7 @@ class TestCliRouting:
         repo.mkdir()
         monkeypatch.setattr("sync_skills.cli.git_status", lambda _: GitStatus(is_repo=True, is_clean=True))
 
-        result = _commit_repo(repo, "message")
+        result = _commit_repo(SimpleNamespace(repo=repo, repo_skills_dir=repo / "skills"), "message")
         captured = capsys.readouterr()
 
         assert result is True
@@ -98,9 +98,9 @@ class TestCliRouting:
         repo = tmp_path / "repo"
         repo.mkdir()
         monkeypatch.setattr("sync_skills.cli.git_status", lambda _: GitStatus(is_repo=True, is_clean=False))
-        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message: False)
+        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message, repo_skills_dir=None: False)
 
-        result = _commit_repo(repo, "message")
+        result = _commit_repo(SimpleNamespace(repo=repo, repo_skills_dir=repo / "skills"), "message")
         captured = capsys.readouterr()
 
         assert result is False

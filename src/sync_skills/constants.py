@@ -24,6 +24,7 @@ DEFAULT_AGENT_DIRS = [
 SKILL_SKELETON = """\
 ---
 name: {name}
+version: 0.0.1
 description: "Description of what this skill does"
 ---
 

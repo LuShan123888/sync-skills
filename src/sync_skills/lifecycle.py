@@ -25,7 +25,7 @@ def _auto_commit(config: Config, command: str, skills: list[str]) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     skill_part = skills[0] if len(skills) == 1 else f"{len(skills)} skills"
     msg = f"{command}: {skill_part} ({timestamp})"
-    if git_add_commit(config.repo, msg):
+    if git_add_commit(config.repo, msg, config.repo_skills_dir):
         print(f"  [git] {msg}")
 
 
