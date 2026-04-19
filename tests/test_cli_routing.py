@@ -79,11 +79,9 @@ class TestCliRouting:
 
         state = _check_state(config)
 
-        assert state == {
-            "orphaned": ["orphan"],
-            "unregistered": ["repo-only"],
-            "broken_links": ["broken-skill: claude", "broken-skill: codex"],
-        }
+        assert state["orphaned"] == ["orphan"]
+        assert state["unregistered"] == ["repo-only"]
+        assert state["broken_links"] == ["broken-skill: claude", "broken-skill: codex"]
 
     def test_commit_repo_skips_clean_workspace(self, tmp_path, capsys, monkeypatch):
         repo = tmp_path / "repo"

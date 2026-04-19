@@ -121,9 +121,9 @@
 | `US-RECOVER-2` | `已实现` | 作为用户，我希望 symlink 缺失、断链或错误目标时能自动修复 | 系统自动创建或重建 symlink | `doctor` |
 | `US-RECOVER-3` | `已实现` | 作为用户，我希望真实目录冲突时不要被静默覆盖 | 系统询问或跳过，不默认覆盖 | `doctor` |
 | `US-RECOVER-4` | `已实现` | 作为用户，我希望先只读查看异常，而不立刻改动 | 系统提供只读状态视图 | `status` |
-| `US-RECOVER-5` | `待实现` | 作为谨慎用户，我希望 `doctor --dry-run` 只预览不修改 | 当前参数已暴露，但还不是真正纯预览 | `doctor --dry-run` |
-| `US-RECOVER-6` | `待实现` | 作为用户，我希望 `status` 能显式报告真实目录冲突 | 当前 `status` 还不直接报告这类冲突 | `status` |
-| `US-RECOVER-7` | `待实现` | 作为用户，我希望 orphaned 状态记录有显式清理路径 | 当前只检测，不会自动或显式清理 | 未来专用入口 |
+| `US-RECOVER-5` | `已实现` | 作为谨慎用户，我希望 `doctor --dry-run` 只预览不修改 | 系统已提供真正只读的 `doctor --dry-run` 预演模式 | `doctor --dry-run` |
+| `US-RECOVER-6` | `已实现` | 作为用户，我希望 `status` 能显式报告真实目录冲突 | `status` 已直接报告这类冲突 | `status` |
+| `US-RECOVER-7` | `已实现` | 作为用户，我希望 orphaned 状态记录有显式清理路径 | `status` 会暴露异常，`doctor` 可显式清理 orphaned state | `status` / `doctor` |
 
 ---
 
@@ -175,12 +175,14 @@
 ## Roadmap
 
 本节只记录当前主线的后续故事。凡是单 Skill 包发布、第三方 Skill 搜索或 registry 化能力，均不属于本阶段 roadmap。
+其中 `US-RM-1` 到 `US-RM-3` 已实现，保留在此作为里程碑记录，避免 roadmap 状态滞后。
 
 ### US-RM-1 `doctor --dry-run` 真正只读
 
-状态：`待实现`
+状态：`已实现`
 阶段：诊断与恢复
 故事：作为维护者，我希望在执行 `doctor --dry-run` 时只看到拟执行修复，而不会改动任何文件系统状态或配置状态，这样我可以先评估风险，再决定是否真正修复。
+说明：当前实现已保证只输出拟执行动作、跳过原因和无操作结果，不改写 state、symlink 或目录结构。
 验收标准：
 1. 不创建、删除或改写 symlink、目录、仓库文件和 state 文件。
 2. 输出包含拟执行动作、跳过原因和无操作结果。
@@ -188,9 +190,10 @@
 
 ### US-RM-2 `status` 生命周期状态补全
 
-状态：`待实现`
+状态：`已实现`
 阶段：日常管理
 故事：作为维护者，我希望 `status` 能直接告诉我每个 Skill 当前是健康、断链、冲突、残留还是未分发，这样我不需要再用多个命令推断系统状态。
+说明：当前实现已显式区分 `managed`、`unknown`、`broken link`、`real directory conflict`、`orphaned`、`managed but not exposed` 等状态。
 验收标准：
 1. 能显式区分 `managed`、`unknown`、`broken link`、`real directory conflict`、`orphaned`、`managed but not exposed` 等状态。
 2. 状态命名和 `doctor` 的修复动作保持一致。
@@ -198,9 +201,10 @@
 
 ### US-RM-3 orphaned 与残留 state 收口
 
-状态：`待实现`
+状态：`已实现`
 阶段：诊断与恢复
 故事：作为维护者，我希望系统能识别并清理 orphaned 和残留 state，这样长期使用后管理状态不会越来越脏。
+说明：当前实现中，`status` 已能暴露这类异常，`doctor` 在真实执行时会清理 orphaned state。
 验收标准：
 1. `status` 能显式暴露这类异常。
 2. `doctor` 能给出明确修复动作。
@@ -208,9 +212,10 @@
 
 ### US-RM-4 Git 异常恢复提示
 
-状态：`部分实现`
+状态：`已实现`
 阶段：协作与同步
 故事：作为维护者，我希望在 `commit`、`push`、`pull` 失败时获得准确、可执行的提示，这样我可以安全处理远程、分叉、冲突和空提交等情况。
+说明：当前实现已覆盖 `git` 不可用、首次 upstream 建立、远程未配置、无改动提交、本地领先或落后、与远程分叉、认证失败、detached HEAD、`pull` 冲突、本地未提交改动和缺失远程分支等场景，并在失败时给出明确的下一步提示。
 验收标准：
 1. 能识别远程未配置、首次 upstream、无改动提交、本地领先或落后、分叉和冲突等常见场景。
 2. 提示信息说明当前状态、为什么失败、下一步该怎么做。

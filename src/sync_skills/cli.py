@@ -31,6 +31,7 @@ from .config import Config, _unexpand_home, load_config, save_config
 from .git_ops import (
     git_add_commit,
     git_collect_skill_changes,
+    git_is_available,
     git_is_repo,
     git_pull,
     git_push,
@@ -112,6 +113,25 @@ def _load_config_or_default(args) -> Config:
 def _get_dry_run(args) -> bool:
     """获取 dry-run 标志。"""
     return getattr(args, "dry_run", False)
+
+
+def _ensure_git_available() -> bool:
+    """在需要 git 的主流程前做显式检查。"""
+    if git_is_available():
+        return True
+    print("[ERROR] 未检测到 git，请先安装 git 后再执行该命令")
+    return False
+
+
+def _remote_relation(status) -> str:
+    """根据 ahead/behind 关系归类当前分支与远程的状态。"""
+    if status.ahead > 0 and status.behind > 0:
+        return "diverged"
+    if status.behind > 0:
+        return "behind"
+    if status.ahead > 0:
+        return "ahead"
+    return "in_sync"
 
 
 def cmd_init(args):
@@ -318,6 +338,9 @@ def cmd_status(args):
 
 def cmd_commit(args):
     """git add + commit。执行前展示变更摘要和 git 命令让用户确认。"""
+    if not _ensure_git_available():
+        return
+
     config = _load_config_or_default(args)
     repo = config.repo
     if not git_is_repo(repo):
@@ -344,6 +367,9 @@ def cmd_commit(args):
 
 def cmd_push(args):
     """git add + commit + push。执行前展示完整 git 命令让用户确认。"""
+    if not _ensure_git_available():
+        return
+
     config = _load_config_or_default(args)
     repo = config.repo
 
@@ -355,9 +381,17 @@ def cmd_push(args):
 
     status = git_status(repo)
     tracking = git_get_tracking_branch(repo)
-    if status.is_clean and tracking and status.ahead == 0:
-        print("[OK] 无待提交改动，当前分支未领先远程，跳过 commit/push")
-        return
+    relation = _remote_relation(status)
+    if status.is_clean and tracking:
+        if relation == "diverged":
+            print("[WARNING] 当前分支与远程已分叉，请先执行 sync-skills pull")
+            return
+        if relation == "behind":
+            print("[WARNING] 当前分支落后远程，请先执行 sync-skills pull")
+            return
+        if relation == "in_sync":
+            print("[OK] 无待提交改动，当前分支与远程一致，跳过 commit/push")
+            return
 
     has_remote = git_has_remote(repo)
     message = args.message or _build_default_git_message(config)
@@ -378,17 +412,27 @@ def cmd_push(args):
         print("[WARNING] 未配置 origin 远程，已完成本地 commit；请先添加远程后再执行 sync-skills push")
         return
 
+    upstream_missing = not tracking and status.branch not in ("", "HEAD")
     success, reason = git_push(repo)
     if success:
-        print("[OK] 已推送到远程")
+        if upstream_missing:
+            print(f"[OK] 已推送到远程，并建立 origin/{status.branch} 追踪")
+        else:
+            print("[OK] 已推送到远程")
     elif reason == "behind":
-        print("[WARNING] 推送失败：当前分支落后远程或已分叉，请先执行 sync-skills pull")
+        failure_status = git_status(repo)
+        if _remote_relation(failure_status) == "diverged":
+            print("[WARNING] 推送失败：当前分支与远程已分叉，请先执行 sync-skills pull")
+        else:
+            print("[WARNING] 推送失败：当前分支落后远程，请先执行 sync-skills pull")
     elif reason == "auth":
         print("[WARNING] 推送失败：远程认证失败，请检查 SSH key 或访问令牌")
     elif reason == "bad_url":
         print("[WARNING] 推送失败：origin 配置异常，请检查远程仓库地址")
     elif reason == "no_remote":
         print("[WARNING] 推送失败：未找到可用的 origin 远程，请先配置远程仓库")
+    elif reason == "unavailable":
+        print("[ERROR] 推送失败：未检测到 git，请先安装 git 后重试")
     elif reason == "detached":
         print("[WARNING] 推送失败：当前处于 detached HEAD，请先切回或创建本地分支")
     elif reason == "network":
@@ -399,6 +443,9 @@ def cmd_push(args):
 
 def cmd_pull(args):
     """git pull + 修复软链接。"""
+    if not _ensure_git_available():
+        return
+
     config = _load_config_or_default(args)
     repo = config.repo
 
@@ -438,7 +485,7 @@ def cmd_pull(args):
         print("[WARNING] 当前处于 detached HEAD，无法自动确定 pull 分支，请先切回或创建本地分支")
         return
     if not tracking and not has_remote:
-        print("[WARNING] 未配置 origin 远程，无法 pull")
+        print("[WARNING] 未配置 origin 远程，无法执行 git pull")
         return
     if tracking:
         pull_cmd = "git pull --rebase"
@@ -481,6 +528,8 @@ def cmd_pull(args):
             print("[WARNING] pull 失败：未找到可用的 origin 远程")
         elif msg == "missing_remote_branch":
             print("[WARNING] pull 失败：远程分支不存在，请检查当前分支与远程分支配置")
+        elif msg == "unavailable":
+            print("[ERROR] pull 失败：未检测到 git，请先安装 git 后重试")
         elif msg == "detached":
             print("[WARNING] pull 失败：当前处于 detached HEAD，请先切回或创建本地分支")
         elif msg == "network":
@@ -718,7 +767,7 @@ def _check_state(config: Config) -> dict:
         if conflict_agents:
             real_dir_conflict_agents[name] = conflict_agents
 
-        if not state.agent_links_ok:
+        if not getattr(state, "agent_links_ok", []):
             managed_but_not_exposed.append(name)
 
     return {
@@ -816,7 +865,12 @@ def _show_git_preview(config: Config, message: str, include_push: bool):
             print(f"  git push -u origin {push_target}")
             if tracking:
                 print(f"\n追踪: {tracking}")
-            if status.behind > 0:
+            else:
+                print(f"\n提示: 当前分支尚未设置 upstream，本次 push 将建立 origin/{push_target} 追踪")
+            relation = _remote_relation(status)
+            if relation == "diverged":
+                print("建议: 当前分支与远程已分叉，建议先执行 sync-skills pull")
+            elif relation == "behind":
                 print("建议: 当前分支落后远程，优先执行 sync-skills pull")
             print(f"远程: {git_get_remote_url(repo)}")
     elif git_has_remote(repo):

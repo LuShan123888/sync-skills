@@ -5,6 +5,7 @@
 
 import subprocess
 import sys
+from shutil import which
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -50,14 +51,32 @@ class GitCommitSummary:
 # Git 命令
 # ============================================================
 
+def git_is_available() -> bool:
+    """判断 git 可执行文件是否可用。"""
+    return which("git") is not None
+
+
+def _git_not_found_result(command: list[str]) -> subprocess.CompletedProcess:
+    """构造统一的 git 缺失结果，避免上层直接抛异常。"""
+    return subprocess.CompletedProcess(command, 127, "", "git executable not found")
+
+
+def _run_process(command: list[str], timeout: int) -> subprocess.CompletedProcess:
+    """执行原始 git 命令，并在 git 缺失时返回统一结果。"""
+    try:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return _git_not_found_result(command)
+
 def _run_git(repo_path: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     """执行 git 命令。"""
-    result = subprocess.run(
-        ["git", "-C", str(repo_path)] + list(args),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    command = ["git", "-C", str(repo_path)] + list(args)
+    result = _run_process(command, timeout=30)
     if check and result.returncode != 0:
         print(f"[ERROR] git {' '.join(args)} failed: {result.stderr.strip()}", file=sys.stderr)
     return result
@@ -77,12 +96,8 @@ def git_init(repo_path: Path) -> bool:
 
 def git_clone(url: str, target_path: Path) -> bool:
     """克隆仓库。"""
-    result = subprocess.run(
-        ["git", "clone", url, str(target_path)],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    command = ["git", "clone", url, str(target_path)]
+    result = _run_process(command, timeout=60)
     if result.returncode != 0:
         print(f"[ERROR] git clone failed: {result.stderr.strip()}", file=sys.stderr)
     return result.returncode == 0
@@ -246,19 +261,13 @@ def git_push(repo_path: Path) -> tuple[bool, str]:
     # 获取当前分支名
     branch_result = _run_git(repo_path, "rev-parse", "--abbrev-ref", "HEAD", check=False)
     if branch_result.returncode != 0:
-        result = subprocess.run(
-            ["git", "-C", str(repo_path), "push"],
-            stderr=subprocess.PIPE, text=True, timeout=120,
-        )
+        result = _run_process(["git", "-C", str(repo_path), "push"], timeout=120)
         return result.returncode == 0, _classify_push_error(result.stderr)
 
     branch = branch_result.stdout.strip()
     if not branch or branch == "HEAD":
         return False, "detached"
-    result = subprocess.run(
-        ["git", "-C", str(repo_path), "push", "-u", "origin", branch],
-        stderr=subprocess.PIPE, text=True, timeout=120,
-    )
+    result = _run_process(["git", "-C", str(repo_path), "push", "-u", "origin", branch], timeout=120)
     return result.returncode == 0, _classify_push_error(result.stderr)
 
 
@@ -267,6 +276,8 @@ def _classify_push_error(stderr: str) -> str:
     if not stderr:
         return ""
     lower = stderr.lower()
+    if "git executable not found" in lower or ("no such file or directory" in lower and "git" in lower):
+        return "unavailable"
     if "non-fast-forward" in lower or "behind" in lower:
         return "behind"
     if "permission denied" in lower or "authentication" in lower:
@@ -289,10 +300,7 @@ def _classify_push_error(stderr: str) -> str:
 def git_pull(repo_path: Path) -> tuple[bool, str]:
     """git pull --rebase。无 tracking 时自动指定 origin <branch>。失败时自动 abort rebase。"""
     # 先尝试普通 pull
-    result = subprocess.run(
-        ["git", "-C", str(repo_path), "pull", "--rebase"],
-        stderr=subprocess.PIPE, text=True, timeout=120,
-    )
+    result = _run_process(["git", "-C", str(repo_path), "pull", "--rebase"], timeout=120)
     if result.returncode == 0:
         return True, "pull 成功"
 
@@ -302,20 +310,15 @@ def git_pull(repo_path: Path) -> tuple[bool, str]:
         if branch_result.returncode == 0:
             branch = branch_result.stdout.strip()
             if branch and branch != "HEAD":
-                result = subprocess.run(
-                    ["git", "-C", str(repo_path), "pull", "--rebase", "origin", branch],
-                    stderr=subprocess.PIPE, text=True, timeout=120,
-                )
+                result = _run_process(["git", "-C", str(repo_path), "pull", "--rebase", "origin", branch], timeout=120)
                 if result.returncode == 0:
                     return True, "pull 成功"
             else:
-                subprocess.run(["git", "-C", str(repo_path), "rebase", "--abort"],
-                               capture_output=True, timeout=30)
+                _run_process(["git", "-C", str(repo_path), "rebase", "--abort"], timeout=30)
                 return False, "detached"
 
     # 所有失败路径：确保 rebase 被 abort，恢复干净状态
-    subprocess.run(["git", "-C", str(repo_path), "rebase", "--abort"],
-                   capture_output=True, timeout=30)
+    _run_process(["git", "-C", str(repo_path), "rebase", "--abort"], timeout=30)
     return False, _classify_pull_error(result.stderr)
 
 
@@ -324,6 +327,8 @@ def _classify_pull_error(stderr: str) -> str:
     if not stderr:
         return "unknown"
     lower = stderr.lower()
+    if "git executable not found" in lower or ("no such file or directory" in lower and "git" in lower):
+        return "unavailable"
     if (
         "please commit your changes or stash them" in lower
         or "your local changes to the following files would be overwritten" in lower

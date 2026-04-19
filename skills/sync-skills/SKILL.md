@@ -85,7 +85,7 @@ Read-only commands:
 - `doctor --dry-run` is truly read-only
 - `status` reports lifecycle states including `managed`, `unknown`, `orphaned`, `broken link`, `real directory conflict`, and `managed but not exposed`
 - `doctor` cleans orphaned state entries during real execution
-- `push` / `pull` provide explicit hints for missing remote, auth failure, detached HEAD, local changes, and missing remote branch
+- `commit` / `push` / `pull` provide explicit hints for missing `git`, missing remote, first upstream setup, behind/diverged branches, auth failure, detached HEAD, local changes, and missing remote branch
 
 ## Decision table
 
@@ -140,6 +140,8 @@ If another workflow touches a skill first, this skill should take over immediate
 - Prefer `status` before `commit`, `push`, and `pull`
 - Prefer `link` over `new` when the skill already exists
 - Prefer `remove` or `unlink` over manual directory deletion
+- Expect first `push` to establish upstream automatically
+- If `push` says the branch is behind or diverged, run `pull` before retrying
 - Do not use removed aliases `fix` or `sync`
 - Treat `--copy` as legacy mode only
 

@@ -28,7 +28,7 @@
 
 - 创建与纳管：创建新 Skill，或把已有 Skill 纳入统一管理
 - 本地分发：通过符号链接把同一个 Skill 暴露给多个 Agent
-- 版本管理：基于 Git 做提交、推送、拉取和回滚
+- 版本管理：基于 Git 做提交、推送、拉取和回滚，并在失败时给出明确提示后安全退出
 - 多机同步：通过远程仓库在多台设备之间保持一致
 - 生命周期管理：支持 link、unlink、remove、doctor、status 等日常操作
 - Agent 接管：项目自带 `skills/sync-skills/SKILL.md`，用于让 Agent 在创建、更新、删除 Skill 后自动衔接 `new`、`link`、`commit`、`push`、`remove`、`unlink`、`doctor`
@@ -75,13 +75,21 @@ sync-skills doctor
 | `init` | 初始化或接入个人 Skill 仓库 |
 | `new` | 创建新的 Skill |
 | `link` | 将已有 Skill 纳入管理并分发到 Agent |
-| `unlink` | 解除指定 Agent 侧的可见性 |
+| `unlink` | 停止托管 Skill，并将内容还原为 Agent 目录中的真实文件 |
 | `remove` | 从管理体系中删除 Skill |
 | `status` | 查看当前 Skill、链接和状态 |
 | `doctor` | 诊断并修复本地状态问题 |
 | `commit` | 提交当前仓库改动 |
-| `push` | 推送整个 Skill 仓库到远程 |
-| `pull` | 从远程拉取整个 Skill 仓库 |
+| `push` | 推送整个 Skill 仓库到远程，首次推送时自动建立 upstream |
+| `pull` | 从远程拉取整个 Skill 仓库，并在成功后重建本地可见性 |
+
+## Git 行为
+
+- `commit` 在无改动时会直接跳过，不创建空提交
+- `push` 会先预览将要执行的 Git 命令；首次推送会建立 `origin/<branch>` 追踪
+- `push` 在本地落后远程或与远程已分叉时，会明确提示先执行 `sync-skills pull`
+- `pull` 会先预览实际的 `git pull --rebase` 命令；成功后会继续执行 `doctor` 修复本地链接状态
+- `commit` / `push` / `pull` 在 `git` 不可用、未配置远程、认证失败、detached HEAD、本地未提交改动、冲突或远程分支缺失等场景下，都会给出明确提示并安全退出
 
 ## 为什么现在不需要 `publish` / `import` / `install-from-git`
 
@@ -133,7 +141,7 @@ One complete path:
 
 - Creation and adoption: create a new Skill or bring an existing one under management
 - Local distribution: expose the same Skill to multiple agents through symlinks
-- Version management: use Git for commit, push, pull, and history-based recovery
+- Version management: use Git for commit, push, pull, and history-based recovery, with explicit failure hints and safe exits
 - Multi-device sync: keep the repository aligned across machines through a remote
 - Lifecycle operations: manage daily operations through `link`, `unlink`, `remove`, `doctor`, and `status`
 - Agent handoff: the repository ships `skills/sync-skills/SKILL.md` so an agent can continue into `new`, `link`, `commit`, `push`, `remove`, `unlink`, and `doctor` after creating, updating, or deleting a Skill
@@ -180,13 +188,21 @@ sync-skills doctor
 | `init` | Initialize or attach to a personal Skill repository |
 | `new` | Create a new Skill |
 | `link` | Bring an existing Skill under management and expose it to agents |
-| `unlink` | Remove visibility from a specific agent side |
+| `unlink` | Stop managing a Skill and restore real directories into agent paths |
 | `remove` | Remove a Skill from the managed lifecycle |
 | `status` | Inspect current Skills, links, and state |
 | `doctor` | Diagnose and repair local state problems |
 | `commit` | Commit current repository changes |
-| `push` | Push the whole Skill repository to the remote |
-| `pull` | Pull the whole Skill repository from the remote |
+| `push` | Push the whole Skill repository to the remote, establishing upstream on first push |
+| `pull` | Pull the whole Skill repository from the remote and rebuild local visibility afterward |
+
+## Git behavior
+
+- `commit` skips clean worktrees instead of creating empty commits
+- `push` previews the exact Git commands first; the first push establishes `origin/<branch>` tracking
+- `push` explicitly tells you to run `sync-skills pull` when the local branch is behind the remote or has diverged
+- `pull` previews the exact `git pull --rebase` command first; after success it runs `doctor` to restore local link visibility
+- `commit`, `push`, and `pull` fail safely with explicit hints for missing `git`, missing remote, auth failure, detached HEAD, local uncommitted changes, conflicts, and missing remote branches
 
 ## Why `publish` / `import` / `install-from-git` are not required yet
 
