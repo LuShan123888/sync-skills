@@ -2410,6 +2410,39 @@ class TestDoctorCommand:
         managed = get_managed_skills(config.state_file)
         assert "unregistered" not in managed
 
+    def test_doctor_dry_run_is_read_only(self, tmp_path, capsys, monkeypatch):
+        """doctor --dry-run 只预演，不修改 state 或 symlink"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
+        from sync_skills.config import save_config
+        from sync_skills.lifecycle import add_skill
+        from sync_skills.state import get_managed_skills
+        import argparse
+
+        (repo_skills / "unregistered").mkdir()
+        (repo_skills / "unregistered" / "SKILL.md").write_text("# unregistered\n")
+        add_skill("test-skill", config)
+        (agent_dirs[0] / "test-skill").unlink()
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        def fail_input(prompt: str = "") -> str:
+            raise AssertionError("doctor --dry-run should not request confirmation")
+
+        monkeypatch.setattr("builtins.input", fail_input)
+
+        cmd_doctor(argparse.Namespace(config=config_path, dry_run=True, yes=False))
+        captured = capsys.readouterr()
+
+        managed = get_managed_skills(config.state_file)
+        assert "unregistered" not in managed
+        assert not (agent_dirs[0] / "test-skill").exists()
+        assert not (agent_dirs[0] / "test-skill").is_symlink()
+        assert "[DRY-RUN]" in captured.out
+        assert "将补充登记" in captured.out
+        assert "将创建" in captured.out
+
     def test_doctor_conflict_prompts_for_choice(self, tmp_path, capsys, monkeypatch):
         """doctor 在非 -y 模式下遇到真实目录冲突应询问是否替换"""
         repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)

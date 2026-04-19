@@ -67,7 +67,10 @@ class TestV1DoctorNoPendingWorkCommand:
         captured = capsys.readouterr()
 
         assert "补充登记" in captured.out
-        assert "unregistered" in get_managed_skills(config.state_file)
+        assert "[DRY-RUN]" in captured.out
+        assert "unregistered" not in get_managed_skills(config.state_file)
+        for agent_dir in agent_dirs:
+            assert not (agent_dir / "unregistered").exists()
 
 
 class TestV1StatusCommand:
@@ -389,6 +392,33 @@ class TestV1DoctorCommand:
 
         assert "确认执行" not in combined
         assert "全部正常" in combined
+
+    def test_doctor_dry_run_does_not_repair_missing_symlink(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_doctor
+        from sync_skills.lifecycle import add_skill
+        from sync_skills.config import save_config
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        add_skill("preview-skill", config)
+        missing_link = agent_dirs[0] / "preview-skill"
+        missing_link.unlink()
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        def fail_input(prompt: str = "") -> str:
+            raise AssertionError("doctor dry-run should not request confirmation")
+
+        monkeypatch.setattr("builtins.input", fail_input)
+
+        cmd_doctor(argparse.Namespace(config=config_path, dry_run=True, yes=False))
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+
+        assert "[DRY-RUN]" in combined
+        assert "将创建" in combined
+        assert not missing_link.exists()
+        assert not missing_link.is_symlink()
 
 
 class TestV1PullCommand:
