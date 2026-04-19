@@ -18,6 +18,7 @@
 - 将 `doctor --dry-run` 改为真正只读的预演模式，不再补登记状态、不再修复 symlink，也不再修改目录结构。
 - 将 `status` 补齐为生命周期状态视图，显式报告 `managed`、`unknown`、`orphaned`、`broken link`、`real directory conflict` 和 `managed but not exposed`。
 - 为 orphaned / 残留 state 增加显式收口路径，`doctor` 现在会清理仓库中已不存在的状态项，`doctor --dry-run` 会预演该清理动作。
+- 补强 `push` / `pull` 的 Git 异常提示与分支场景处理，显式覆盖未配置远程、认证失败、detached HEAD、本地未提交改动和远程分支缺失等情况。
 
 ## [v1.1.3] - 2026-04-19
 软件包版本行：`0.5.20260418.4`

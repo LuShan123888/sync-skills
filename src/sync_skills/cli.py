@@ -374,14 +374,27 @@ def cmd_push(args):
         return
 
     # 执行 push
-    if has_remote:
-        success, reason = git_push(repo)
-        if success:
-            print("[OK] 已推送到远程")
-        elif reason == "behind":
-            print("[WARNING] 本地落后远程，请先执行 sync-skills pull")
-        else:
-            print("[WARNING] 推送失败，请检查远程仓库配置和网络")
+    if not has_remote:
+        print("[WARNING] 未配置 origin 远程，已完成本地 commit；请先添加远程后再执行 sync-skills push")
+        return
+
+    success, reason = git_push(repo)
+    if success:
+        print("[OK] 已推送到远程")
+    elif reason == "behind":
+        print("[WARNING] 推送失败：当前分支落后远程或已分叉，请先执行 sync-skills pull")
+    elif reason == "auth":
+        print("[WARNING] 推送失败：远程认证失败，请检查 SSH key 或访问令牌")
+    elif reason == "bad_url":
+        print("[WARNING] 推送失败：origin 配置异常，请检查远程仓库地址")
+    elif reason == "no_remote":
+        print("[WARNING] 推送失败：未找到可用的 origin 远程，请先配置远程仓库")
+    elif reason == "detached":
+        print("[WARNING] 推送失败：当前处于 detached HEAD，请先切回或创建本地分支")
+    elif reason == "network":
+        print("[WARNING] 推送失败：网络异常，请检查网络连接后重试")
+    else:
+        print("[WARNING] 推送失败：请检查远程仓库状态后重试")
 
 
 def cmd_pull(args):
@@ -393,10 +406,11 @@ def cmd_pull(args):
         print(f"[ERROR] {repo} 不是 git 仓库")
         return
 
-    from .git_ops import git_get_tracking_branch
+    from .git_ops import git_get_tracking_branch, git_has_remote
 
     status = git_status(repo)
     tracking = git_get_tracking_branch(repo)
+    has_remote = git_has_remote(repo)
     no_remote_updates = tracking and status.is_clean and status.behind == 0
 
     # Pull 前：检查 skill 管理状态
@@ -420,6 +434,12 @@ def cmd_pull(args):
     # 展示将要执行的 git 命令
     branch = status.branch or "(未命名)"
     tracking = git_get_tracking_branch(repo)
+    if not tracking and branch == "HEAD":
+        print("[WARNING] 当前处于 detached HEAD，无法自动确定 pull 分支，请先切回或创建本地分支")
+        return
+    if not tracking and not has_remote:
+        print("[WARNING] 未配置 origin 远程，无法 pull")
+        return
     if tracking:
         pull_cmd = "git pull --rebase"
     else:
@@ -449,7 +469,24 @@ def cmd_pull(args):
 
     success, msg = git_pull(repo)
     if not success:
-        print(f"[ERROR] pull 失败: {msg}")
+        if msg == "local_changes":
+            print("[WARNING] pull 失败：本地有未提交改动，请先 commit 或 stash 再重试")
+        elif msg == "conflict":
+            print("[WARNING] pull 失败：rebase 冲突，已自动 abort；请处理冲突后重试")
+        elif msg == "auth":
+            print("[WARNING] pull 失败：远程认证失败，请检查 SSH key 或访问令牌")
+        elif msg == "bad_url":
+            print("[WARNING] pull 失败：origin 配置异常，请检查远程仓库地址")
+        elif msg == "no_remote":
+            print("[WARNING] pull 失败：未找到可用的 origin 远程")
+        elif msg == "missing_remote_branch":
+            print("[WARNING] pull 失败：远程分支不存在，请检查当前分支与远程分支配置")
+        elif msg == "detached":
+            print("[WARNING] pull 失败：当前处于 detached HEAD，请先切回或创建本地分支")
+        elif msg == "network":
+            print("[WARNING] pull 失败：网络异常，请检查网络连接后重试")
+        else:
+            print("[ERROR] pull 失败：请检查远程仓库状态后重试")
         return
 
     print(f"[OK] {msg}")
@@ -772,13 +809,16 @@ def _show_git_preview(config: Config, message: str, include_push: bool):
 
     if include_push:
         tracking = git_get_tracking_branch(repo)
-        push_target = tracking.replace("origin/", "") if tracking else branch
-        print(f"  git push -u origin {push_target}")
-        if tracking:
-            print(f"\n追踪: {tracking}")
-        if status.behind > 0:
-            print("建议: 当前分支落后远程，优先执行 sync-skills pull")
-        print(f"远程: {git_get_remote_url(repo)}")
+        if branch == "HEAD":
+            print("  [WARNING] 当前处于 detached HEAD，push 前请先切回或创建本地分支")
+        else:
+            push_target = tracking.replace("origin/", "") if tracking else branch
+            print(f"  git push -u origin {push_target}")
+            if tracking:
+                print(f"\n追踪: {tracking}")
+            if status.behind > 0:
+                print("建议: 当前分支落后远程，优先执行 sync-skills pull")
+            print(f"远程: {git_get_remote_url(repo)}")
     elif git_has_remote(repo):
         print("\n提示: 已检测到远程仓库，提交后可继续执行 sync-skills push")
 

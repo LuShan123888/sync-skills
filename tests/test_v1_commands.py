@@ -389,6 +389,56 @@ class TestV1PushCommand:
         assert pushed == []
         assert "无待提交改动，当前分支未领先远程，跳过 commit/push" in captured.out
 
+    def test_push_without_remote_keeps_local_commit_and_warns(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_push
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        monkeypatch.setattr("sync_skills.cli.git_collect_skill_changes", lambda repo, repo_skills_dir: [])
+        monkeypatch.setattr("sync_skills.cli.git_recent_commits", lambda repo: [])
+        monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="main", is_clean=False))
+        import sync_skills.git_ops as git_ops_module
+        monkeypatch.setattr(git_ops_module, "git_has_remote", lambda repo: False)
+        monkeypatch.setattr(git_ops_module, "git_get_tracking_branch", lambda repo: "")
+
+        committed = []
+        pushed = []
+        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message, repo_skills_dir=None: committed.append(message) or True)
+        monkeypatch.setattr("sync_skills.cli.git_push", lambda repo: pushed.append(repo) or (True, ""))
+
+        cmd_push(make_args(config_path, yes=True))
+        captured = capsys.readouterr()
+
+        assert len(committed) == 1
+        assert pushed == []
+        assert "未配置 origin 远程" in captured.out
+
+    def test_push_auth_failure_shows_clear_hint(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_push
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        monkeypatch.setattr("sync_skills.cli.git_collect_skill_changes", lambda repo, repo_skills_dir: [])
+        monkeypatch.setattr("sync_skills.cli.git_recent_commits", lambda repo: [])
+        monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="main", is_clean=False))
+        import sync_skills.git_ops as git_ops_module
+        monkeypatch.setattr(git_ops_module, "git_has_remote", lambda repo: True)
+        monkeypatch.setattr(git_ops_module, "git_get_tracking_branch", lambda repo: "origin/main")
+        monkeypatch.setattr(git_ops_module, "git_get_remote_url", lambda repo: "git@example.com:repo.git")
+        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message, repo_skills_dir=None: True)
+        monkeypatch.setattr("sync_skills.cli.git_push", lambda repo: (False, "auth"))
+
+        cmd_push(make_args(config_path, yes=True))
+        captured = capsys.readouterr()
+
+        assert "远程认证失败" in captured.out
+
 
 class TestV1DoctorCommand:
     def test_doctor_no_pending_work_skips_confirmation(self, tmp_path, capsys, monkeypatch):
@@ -517,6 +567,76 @@ class TestV1PullCommand:
         assert repaired == [False]
         assert "确认执行" not in (captured.out + captured.err)
         assert "[OK] pull 成功" in captured.out
+
+    def test_pull_without_remote_warns_and_returns(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_pull
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="main", is_clean=True))
+        import sync_skills.git_ops as git_ops_module
+        monkeypatch.setattr(git_ops_module, "git_get_tracking_branch", lambda repo: "")
+        monkeypatch.setattr(git_ops_module, "git_has_remote", lambda repo: False)
+
+        pulled = []
+        monkeypatch.setattr("sync_skills.cli.git_pull", lambda repo: pulled.append(repo) or (True, "pull 成功"))
+
+        cmd_pull(argparse.Namespace(config=config_path, dry_run=False, yes=False))
+        captured = capsys.readouterr()
+
+        assert pulled == []
+        assert "未配置 origin 远程，无法 pull" in captured.out
+
+    def test_pull_detached_head_warns_and_returns(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_pull
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="HEAD", is_clean=True))
+        import sync_skills.git_ops as git_ops_module
+        monkeypatch.setattr(git_ops_module, "git_get_tracking_branch", lambda repo: "")
+        monkeypatch.setattr(git_ops_module, "git_has_remote", lambda repo: True)
+
+        pulled = []
+        repaired = []
+        monkeypatch.setattr("sync_skills.cli.git_pull", lambda repo: pulled.append(repo) or (True, "pull 成功"))
+        monkeypatch.setattr("sync_skills.cli._do_doctor", lambda config, auto_confirm=False: repaired.append(auto_confirm))
+
+        cmd_pull(argparse.Namespace(config=config_path, dry_run=False, yes=False))
+        captured = capsys.readouterr()
+
+        assert pulled == []
+        assert repaired == []
+        assert "detached HEAD" in captured.out
+
+    def test_pull_local_changes_failure_shows_clear_hint(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_pull
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="main", is_clean=True))
+        import sync_skills.git_ops as git_ops_module
+        monkeypatch.setattr(git_ops_module, "git_get_tracking_branch", lambda repo: "origin/main")
+        monkeypatch.setattr(git_ops_module, "git_has_remote", lambda repo: True)
+
+        repaired = []
+        monkeypatch.setattr("sync_skills.cli.git_pull", lambda repo: (False, "local_changes"))
+        monkeypatch.setattr("sync_skills.cli._do_doctor", lambda config, auto_confirm=False: repaired.append(auto_confirm))
+
+        cmd_pull(argparse.Namespace(config=config_path, dry_run=False, yes=True))
+        captured = capsys.readouterr()
+
+        assert repaired == []
+        assert "本地有未提交改动" in captured.out
 
 
 class TestV1AutoCommitVersion:

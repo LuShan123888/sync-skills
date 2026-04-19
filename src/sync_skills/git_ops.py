@@ -242,11 +242,7 @@ def git_add_commit(repo_path: Path, message: str, repo_skills_dir: Path | None =
 
 
 def git_push(repo_path: Path) -> tuple[bool, str]:
-    """git push，首次推送自动设置 upstream。返回 (success, error_reason)。
-
-    输出直接到终端（支持 SSH 交互），仅捕获 stderr 用于判断错误类型。
-    error_reason: "" 成功, "behind" 落后远程, "auth" 认证失败, 其他为原始错误
-    """
+    """git push，首次推送自动设置 upstream。返回 (success, error_reason)。"""
     # 获取当前分支名
     branch_result = _run_git(repo_path, "rev-parse", "--abbrev-ref", "HEAD", check=False)
     if branch_result.returncode != 0:
@@ -257,6 +253,8 @@ def git_push(repo_path: Path) -> tuple[bool, str]:
         return result.returncode == 0, _classify_push_error(result.stderr)
 
     branch = branch_result.stdout.strip()
+    if not branch or branch == "HEAD":
+        return False, "detached"
     result = subprocess.run(
         ["git", "-C", str(repo_path), "push", "-u", "origin", branch],
         stderr=subprocess.PIPE, text=True, timeout=120,
@@ -273,8 +271,18 @@ def _classify_push_error(stderr: str) -> str:
         return "behind"
     if "permission denied" in lower or "authentication" in lower:
         return "auth"
+    if "no configured push destination" in lower or "no such remote" in lower:
+        return "no_remote"
     if "could not read" in lower or "does not appear to be a git" in lower:
         return "bad_url"
+    if (
+        "could not resolve host" in lower
+        or "network is unreachable" in lower
+        or "connection timed out" in lower
+        or "operation timed out" in lower
+        or "connection reset" in lower
+    ):
+        return "network"
     return "unknown"
 
 
@@ -293,17 +301,61 @@ def git_pull(repo_path: Path) -> tuple[bool, str]:
         branch_result = _run_git(repo_path, "rev-parse", "--abbrev-ref", "HEAD", check=False)
         if branch_result.returncode == 0:
             branch = branch_result.stdout.strip()
-            result = subprocess.run(
-                ["git", "-C", str(repo_path), "pull", "--rebase", "origin", branch],
-                stderr=subprocess.PIPE, text=True, timeout=120,
-            )
-            if result.returncode == 0:
-                return True, "pull 成功"
+            if branch and branch != "HEAD":
+                result = subprocess.run(
+                    ["git", "-C", str(repo_path), "pull", "--rebase", "origin", branch],
+                    stderr=subprocess.PIPE, text=True, timeout=120,
+                )
+                if result.returncode == 0:
+                    return True, "pull 成功"
+            else:
+                subprocess.run(["git", "-C", str(repo_path), "rebase", "--abort"],
+                               capture_output=True, timeout=30)
+                return False, "detached"
 
     # 所有失败路径：确保 rebase 被 abort，恢复干净状态
     subprocess.run(["git", "-C", str(repo_path), "rebase", "--abort"],
                    capture_output=True, timeout=30)
-    return False, result.stderr.strip()
+    return False, _classify_pull_error(result.stderr)
+
+
+def _classify_pull_error(stderr: str) -> str:
+    """根据 git pull 的 stderr 分类错误原因。"""
+    if not stderr:
+        return "unknown"
+    lower = stderr.lower()
+    if (
+        "please commit your changes or stash them" in lower
+        or "your local changes to the following files would be overwritten" in lower
+    ):
+        return "local_changes"
+    if (
+        "conflict" in lower
+        or "could not apply" in lower
+        or "resolve all conflicts manually" in lower
+    ):
+        return "conflict"
+    if "permission denied" in lower or "authentication failed" in lower:
+        return "auth"
+    if "no such remote" in lower:
+        return "no_remote"
+    if "couldn't find remote ref" in lower or "remote ref does not exist" in lower:
+        return "missing_remote_branch"
+    if (
+        "does not appear to be a git repository" in lower
+        or "repository not found" in lower
+        or ("repository '" in lower and "' not found" in lower)
+    ):
+        return "bad_url"
+    if (
+        "could not resolve host" in lower
+        or "network is unreachable" in lower
+        or "connection timed out" in lower
+        or "operation timed out" in lower
+        or "connection reset" in lower
+    ):
+        return "network"
+    return "unknown"
 
 
 def git_has_remote(repo_path: Path) -> bool:

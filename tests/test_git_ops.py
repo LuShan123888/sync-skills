@@ -5,6 +5,7 @@ from sync_skills.git_ops import (
     GitCommitSummary,
     GitSkillChange,
     GitStatus,
+    _classify_pull_error,
     _classify_push_error,
     git_collect_skill_changes,
     git_pull,
@@ -118,12 +119,47 @@ class TestGitOps:
         success, msg = git_pull(repo)
 
         assert success is False
-        assert msg == "merge conflict"
+        assert msg == "conflict"
+        assert any(cmd[-2:] == ["rebase", "--abort"] for cmd in calls)
+
+    def test_git_pull_returns_detached_when_no_tracking_branch_on_head(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[-2:] == ["pull", "--rebase"]:
+                return _cp(returncode=1, stderr="There is no tracking information for the current branch.")
+            if cmd[-2:] == ["rebase", "--abort"]:
+                return _cp(returncode=0)
+            raise AssertionError(cmd)
+
+        monkeypatch.setattr("sync_skills.git_ops.subprocess.run", fake_run)
+        monkeypatch.setattr("sync_skills.git_ops._run_git", lambda *args, **kwargs: _cp(stdout="HEAD\n"))
+
+        success, msg = git_pull(repo)
+
+        assert success is False
+        assert msg == "detached"
         assert any(cmd[-2:] == ["rebase", "--abort"] for cmd in calls)
 
     def test_classify_push_error_covers_known_categories(self):
         assert _classify_push_error("non-fast-forward update rejected") == "behind"
         assert _classify_push_error("Permission denied (publickey)") == "auth"
+        assert _classify_push_error("fatal: No configured push destination.") == "no_remote"
         assert _classify_push_error("does not appear to be a git repository") == "bad_url"
+        assert _classify_push_error("ssh: Could not resolve host github.com") == "network"
         assert _classify_push_error("some random failure") == "unknown"
         assert _classify_push_error("") == ""
+
+    def test_classify_pull_error_covers_known_categories(self):
+        assert _classify_pull_error("Please commit your changes or stash them before you merge.") == "local_changes"
+        assert _classify_pull_error("Resolve all conflicts manually, mark them as resolved with git add") == "conflict"
+        assert _classify_pull_error("Authentication failed for 'origin'") == "auth"
+        assert _classify_pull_error("fatal: No such remote: 'origin'") == "no_remote"
+        assert _classify_pull_error("fatal: couldn't find remote ref main") == "missing_remote_branch"
+        assert _classify_pull_error("fatal: repository 'x' not found") == "bad_url"
+        assert _classify_pull_error("ssh: Could not resolve host github.com") == "network"
+        assert _classify_pull_error("some random failure") == "unknown"
