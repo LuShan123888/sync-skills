@@ -2548,19 +2548,6 @@ class TestDoctorCommand:
         assert "全部正常" in captured.out
         assert "已修复" not in captured.out
 
-    def test_doctor_compatibility_alias_fix(self, tmp_path, capsys):
-        """fix 应作为 doctor 的兼容别名"""
-        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
-        from sync_skills.cli import main
-        from sync_skills.config import save_config
-
-        config_path = tmp_path / "config.toml"
-        save_config(config, config_path)
-
-        main(["--config", str(config_path), "fix", "-y"])
-        captured = capsys.readouterr()
-        assert "错误" not in captured.out
-
 
 class TestPullCommand:
     """测试 sync-skills pull 命令"""

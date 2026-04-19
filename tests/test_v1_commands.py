@@ -51,7 +51,7 @@ def make_args(config_path: Path, *, yes=False, dry_run=False, message=""):
     return argparse.Namespace(config=config_path, dry_run=dry_run, yes=yes, message=message)
 
 
-class TestV1DoctorCommand:
+class TestV1DoctorNoPendingWorkCommand:
     def test_doctor_dry_run_does_not_register_or_repair_links(self, tmp_path, capsys):
         from sync_skills.cli import cmd_doctor
 
@@ -230,6 +230,26 @@ class TestV1CommitCommand:
         assert read_version(repo_skills / "a") == "1.0.1"
         assert read_version(repo_skills / "b") == "1.0.1"
 
+    def test_commit_no_pending_changes_skips_confirmation(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_commit
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        def fail_input(prompt: str = "") -> str:
+            raise AssertionError("commit should not request confirmation")
+
+        monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="main", is_clean=True))
+        monkeypatch.setattr("builtins.input", fail_input)
+
+        cmd_commit(make_args(config_path))
+        captured = capsys.readouterr()
+
+        assert "无变更，跳过 commit" in captured.out
+
+
 
 class TestV1PushCommand:
     def test_push_success_commits_then_pushes_with_yes(self, tmp_path, capsys, monkeypatch):
@@ -317,6 +337,59 @@ class TestV1PushCommand:
         assert read_version(skill_dir) == "1.2.4"
         assert "[OK] 已推送到远程" in captured.out
 
+    def test_push_skips_confirmation_when_clean_and_no_pending_updates(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_push
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        def fail_input(prompt: str = "") -> str:
+            raise AssertionError("push should not request confirmation")
+
+        import sync_skills.git_ops as git_ops_module
+        monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="main", is_clean=True, ahead=0, behind=0))
+        monkeypatch.setattr(git_ops_module, "git_get_tracking_branch", lambda repo: "origin/main")
+
+        committed = []
+        pushed = []
+        monkeypatch.setattr("sync_skills.cli.git_add_commit", lambda repo, message, repo_skills_dir=None: committed.append(message) or True)
+        monkeypatch.setattr("sync_skills.cli.git_push", lambda repo: pushed.append(repo) or (True, ""))
+        monkeypatch.setattr("builtins.input", fail_input)
+
+        cmd_push(make_args(config_path, yes=False))
+        captured = capsys.readouterr()
+
+        assert committed == []
+        assert pushed == []
+        assert "无待提交改动，当前分支未领先远程，跳过 commit/push" in captured.out
+
+
+class TestV1DoctorCommand:
+    def test_doctor_no_pending_work_skips_confirmation(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_doctor
+        from sync_skills.lifecycle import add_skill
+        from sync_skills.config import save_config
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        add_skill("healthy-skill", config)
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        def fail_input(prompt: str = "") -> str:
+            raise AssertionError("doctor should not request confirmation")
+
+        monkeypatch.setattr("builtins.input", fail_input)
+
+        cmd_doctor(argparse.Namespace(config=config_path, dry_run=False, yes=False))
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+
+        assert "确认执行" not in combined
+        assert "全部正常" in combined
+
 
 class TestV1PullCommand:
     def test_pull_success_calls_git_pull_then_doctor(self, tmp_path, capsys, monkeypatch):
@@ -364,6 +437,35 @@ class TestV1PullCommand:
         assert pulled == []
         assert repaired == []
         assert "[DRY-RUN]" in captured.out
+
+    def test_pull_skips_confirmation_when_no_remote_updates(self, tmp_path, capsys, monkeypatch):
+        from sync_skills.cli import cmd_pull
+
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        git_init(repo)
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        def fail_input(prompt: str = "") -> str:
+            raise AssertionError("pull should not request confirmation")
+
+        import sync_skills.git_ops as git_ops_module
+        monkeypatch.setattr("sync_skills.cli.git_status", lambda repo: GitStatus(is_repo=True, branch="main", is_clean=True, ahead=0, behind=0))
+        monkeypatch.setattr(git_ops_module, "git_get_tracking_branch", lambda repo: "origin/main")
+
+        pulled = []
+        repaired = []
+        monkeypatch.setattr("sync_skills.cli.git_pull", lambda repo: pulled.append(repo) or (True, "pull 成功"))
+        monkeypatch.setattr("sync_skills.cli._do_doctor", lambda config, auto_confirm=False: repaired.append(auto_confirm) or None)
+        monkeypatch.setattr("builtins.input", fail_input)
+
+        cmd_pull(argparse.Namespace(config=config_path, dry_run=False, yes=False))
+        captured = capsys.readouterr()
+
+        assert pulled == [repo]
+        assert repaired == [False]
+        assert "确认执行" not in (captured.out + captured.err)
+        assert "[OK] pull 成功" in captured.out
 
 
 class TestV1AutoCommitVersion:

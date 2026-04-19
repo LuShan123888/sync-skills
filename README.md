@@ -226,13 +226,6 @@ sync-skills unlink my-skill
 | `sync-skills --copy --delete <name>` | v0.6 删除 skill |
 | `sync-skills --copy --dry-run` | v0.6 预览模式 |
 
-### 兼容别名
-
-| 别名 | 等效命令 |
-|------|----------|
-| `sync-skills fix` | `sync-skills doctor` |
-| `sync-skills sync` | `sync-skills doctor` |
-
 ### 默认目录
 
 | 角色 | 路径 |
@@ -511,13 +504,6 @@ sync-skills unlink my-skill
 | `sync-skills --copy --force` | v0.6 forced sync |
 | `sync-skills --copy --delete <name>` | v0.6 delete skill |
 | `sync-skills --copy --dry-run` | v0.6 dry-run mode |
-
-### Compatibility Aliases
-
-| Alias | Equivalent |
-|------|----------|
-| `sync-skills fix` | `sync-skills doctor` |
-| `sync-skills sync` | `sync-skills doctor` |
 
 ### Default Directories
 

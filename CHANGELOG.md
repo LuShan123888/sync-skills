@@ -11,6 +11,8 @@
 
 ### 变更
 - 正式将项目历史独立到独立的 `CHANGELOG.md` 文件，并将发布历史从 `docs/DESIGN.md` 中迁移。
+- 去除 `fix` / `sync` 兼容别名，不再将其映射到 `doctor`。
+- 重写 `docs/DESIGN.md`，将其对齐到当前代码实现，并移除历史演进内容。
 
 ## [v1.1.3] - 2026-04-19
 软件包版本行：`0.5.20260418.4`
@@ -181,6 +183,8 @@ This repository currently uses two version tracks:
 
 ### Changed
 - Formalized project history into a standalone `CHANGELOG.md` and moved release history out of `docs/DESIGN.md`.
+- Removed the `fix` / `sync` compatibility aliases instead of mapping them to `doctor`.
+- Rewrote `docs/DESIGN.md` to match the current code behavior and removed historical evolution content from the design doc.
 
 ## [v1.1.3] - 2026-04-19
 Package version line: `0.5.20260418.4`

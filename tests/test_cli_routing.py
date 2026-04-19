@@ -1,4 +1,5 @@
 import argparse
+import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -26,16 +27,17 @@ class TestCliRouting:
 
         assert called == [["list"]]
 
-    def test_main_routes_fix_alias_to_doctor(self, tmp_path, monkeypatch):
-        called = []
-        monkeypatch.setattr("sync_skills.cli.cmd_doctor", lambda args: called.append(args))
-
+    @pytest.mark.parametrize("alias", ["fix", "sync"])
+    def test_main_treats_legacy_alias_as_invalid_command(self, tmp_path, capsys, alias):
         config_path = tmp_path / "config.toml"
         config_path.write_text("")
-        main(["--config", str(config_path), "fix", "-y"])
 
-        assert len(called) == 1
-        assert called[0].yes is True
+        with pytest.raises(SystemExit) as exc:
+            main(["--config", str(config_path), alias, "-y"])
+
+        captured = capsys.readouterr()
+        assert exc.value.code == 2
+        assert "invalid choice" in captured.err.lower() or "无效的选择" in captured.err
 
     def test_build_default_git_message_uses_single_skill_name(self, tmp_path, monkeypatch):
         config = make_config(tmp_path)

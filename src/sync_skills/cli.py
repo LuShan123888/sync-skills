@@ -269,9 +269,13 @@ def cmd_commit(args):
     """git add + commit。执行前展示变更摘要和 git 命令让用户确认。"""
     config = _load_config_or_default(args)
     repo = config.repo
-
     if not git_is_repo(repo):
         print(f"[ERROR] {repo} 不是 git 仓库")
+        return
+
+    status = git_status(repo)
+    if status.is_clean:
+        print("[OK] 无变更，跳过 commit")
         return
 
     message = args.message or _build_default_git_message(config)
@@ -298,8 +302,14 @@ def cmd_push(args):
 
     from .git_ops import git_get_remote_url, git_get_tracking_branch, git_has_remote
 
-    message = args.message or _build_default_git_message(config)
+    status = git_status(repo)
+    tracking = git_get_tracking_branch(repo)
+    if status.is_clean and tracking and status.ahead == 0:
+        print("[OK] 无待提交改动，当前分支未领先远程，跳过 commit/push")
+        return
+
     has_remote = git_has_remote(repo)
+    message = args.message or _build_default_git_message(config)
     _show_git_preview(config, message, include_push=has_remote)
 
     if _get_dry_run(args):
@@ -332,6 +342,12 @@ def cmd_pull(args):
         print(f"[ERROR] {repo} 不是 git 仓库")
         return
 
+    from .git_ops import git_get_tracking_branch
+
+    status = git_status(repo)
+    tracking = git_get_tracking_branch(repo)
+    no_remote_updates = tracking and status.is_clean and status.behind == 0
+
     # Pull 前：检查 skill 管理状态
     state = _check_state(config)
     has_issues = any([state["orphaned"], state["broken_links"]])
@@ -351,8 +367,7 @@ def cmd_pull(args):
                 return
 
     # 展示将要执行的 git 命令
-    from .git_ops import git_get_tracking_branch
-    branch = git_status(repo).branch or "(未命名)"
+    branch = status.branch or "(未命名)"
     tracking = git_get_tracking_branch(repo)
     if tracking:
         pull_cmd = "git pull --rebase"
@@ -371,7 +386,7 @@ def cmd_pull(args):
         print("\n[DRY-RUN] 以上命令不会执行")
         return
 
-    if not args.yes:
+    if not args.yes and not no_remote_updates:
         try:
             confirm = input("\n确认执行? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -396,7 +411,14 @@ def cmd_doctor(args):
     """验证/修复软链接和状态一致性。"""
     config = _load_config_or_default(args)
 
-    if not _get_dry_run(args) and not args.yes:
+    managed = get_managed_skills(config.state_file)
+    if not managed:
+        current_status = _check_state(config)
+        if not current_status["unregistered"] and not current_status["orphaned"]:
+            print("没有已管理的 skill")
+            return
+
+    if not _get_dry_run(args) and not args.yes and _doctor_has_work(config):
         try:
             confirm = input("\n确认执行? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -407,6 +429,36 @@ def cmd_doctor(args):
             return
 
     _do_doctor(config, auto_confirm=args.yes)
+
+
+def _doctor_has_work(config: Config) -> bool:
+    """判断 doctor 是否有可执行的修复项。"""
+    status = _check_state(config)
+    if status["orphaned"] or status["unregistered"]:
+        return True
+
+    managed = get_managed_skills(config.state_file)
+    if not managed:
+        return False
+
+    from .symlink import verify_links
+
+    for name in sorted(managed):
+        repo_target = config.repo_skills_dir / name
+        if not repo_target.is_dir():
+            continue
+        for agent_dir in config.effective_agent_dirs:
+            link = agent_dir / name
+            if link.exists() and not link.is_symlink():
+                return True
+        state = verify_links(name, config.repo_skills_dir, config.effective_agent_dirs)
+        if (
+            getattr(state, "agent_links_missing", [])
+            or getattr(state, "agent_links_broken", [])
+            or getattr(state, "agent_links_wrong_target", [])
+        ):
+            return True
+    return False
 
 
 def _do_doctor(config: Config, auto_confirm: bool = False):
@@ -478,7 +530,11 @@ def _check_state(config: Config) -> dict:
         if not repo_target.is_dir():
             continue
         state = verify_links(name, config.repo_skills_dir, config.effective_agent_dirs)
-        for agent_name in state.agent_links_broken + state.agent_links_missing:
+        for agent_name in (
+            state.agent_links_broken
+            + state.agent_links_missing
+            + getattr(state, "agent_links_wrong_target", [])
+        ):
             broken_links.append(f"{name}: {agent_name}")
 
     return {
@@ -757,13 +813,6 @@ def main(argv: list[str] | None = None):
             from .sync_legacy import main_legacy
             main_legacy(argv)
             return
-
-        # fix/sync 兼容别名：在 parse_args 前替换为 doctor
-        for i, arg in enumerate(argv):
-            if arg in ("fix", "sync") and i > 0 and argv[i - 1].startswith("-") is False:
-                argv = list(argv)
-                argv[i] = "doctor"
-                break
 
     args = parse_args(argv)
 
