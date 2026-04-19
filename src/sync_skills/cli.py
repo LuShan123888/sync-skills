@@ -535,9 +535,9 @@ def _preview_doctor(config: Config):
             print(f"  + {name}")
 
     if status["orphaned"]:
-        print(f"\n状态文件对齐: {len(status['orphaned'])} 个 skill 在状态文件中但仓库中不存在")
+        print(f"\n状态文件收口: 将清理 {len(status['orphaned'])} 个 orphaned skill")
         for name in status["orphaned"]:
-            print(f"  ! {name}（可能需要 sync-skills pull）")
+            print(f"  - {name}（状态文件中存在，但仓库中不存在；如需恢复请先 pull）")
 
     preview_managed = managed | set(status["unregistered"])
     if not preview_managed:
@@ -603,9 +603,12 @@ def _do_doctor(config: Config, auto_confirm: bool = False):
             print(f"  + {name}")
 
     if orphaned:
-        print(f"\n状态文件对齐: {len(orphaned)} 个 skill 在状态文件中但仓库中不存在")
+        from .state import remove_managed
+
+        print(f"\n状态文件收口: 已清理 {len(orphaned)} 个 orphaned skill")
         for name in orphaned:
-            print(f"  ! {name}（可能需要 sync-skills pull）")
+            remove_managed(name, config.state_file)
+            print(f"  - {name}（状态文件中存在，但仓库中不存在）")
 
     # 更新 managed 集合
     managed = get_managed_skills(config.state_file)

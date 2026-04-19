@@ -2473,11 +2473,11 @@ class TestDoctorCommand:
 
 
     def test_doctor_detects_orphaned_skills(self, tmp_path, capsys):
-        """状态文件中有但 repo 中没有的 skill 应报告为 orphaned"""
+        """状态文件中有但 repo 中没有的 skill 应在 doctor 中被清理"""
         repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         from sync_skills.cli import cmd_doctor
         from sync_skills.config import save_config
-        from sync_skills.state import add_managed
+        from sync_skills.state import add_managed, get_managed_skills
 
         # 在状态文件中注册一个不存在的 skill
         add_managed("ghost-skill", config.state_file)
@@ -2489,7 +2489,8 @@ class TestDoctorCommand:
         captured = capsys.readouterr()
 
         assert "ghost-skill" in captured.out
-        assert "仓库中不存在" in captured.out
+        assert "已清理" in captured.out
+        assert "ghost-skill" not in get_managed_skills(config.state_file)
 
     def test_doctor_repairs_missing_symlinks(self, tmp_path, capsys):
         """缺失的 symlink 应自动修复"""

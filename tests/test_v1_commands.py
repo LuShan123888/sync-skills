@@ -54,11 +54,13 @@ def make_args(config_path: Path, *, yes=False, dry_run=False, message=""):
 class TestV1DoctorNoPendingWorkCommand:
     def test_doctor_dry_run_does_not_register_or_repair_links(self, tmp_path, capsys):
         from sync_skills.cli import cmd_doctor
+        from sync_skills.state import add_managed
 
         repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         skill_dir = repo_skills / "unregistered"
         skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text("# unregistered\n")
+        add_managed("ghost-skill", config.state_file)
 
         config_path = tmp_path / "config.toml"
         save_config(config, config_path)
@@ -67,8 +69,10 @@ class TestV1DoctorNoPendingWorkCommand:
         captured = capsys.readouterr()
 
         assert "补充登记" in captured.out
+        assert "将清理" in captured.out
         assert "[DRY-RUN]" in captured.out
         assert "unregistered" not in get_managed_skills(config.state_file)
+        assert "ghost-skill" in get_managed_skills(config.state_file)
         for agent_dir in agent_dirs:
             assert not (agent_dir / "unregistered").exists()
 
