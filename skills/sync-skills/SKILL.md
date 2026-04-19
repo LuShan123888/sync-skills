@@ -1,139 +1,156 @@
 ---
 name: sync-skills
-description: "Manage custom AI coding agent skills via git + symlink. Use when the user wants to add/remove/list custom skills, check git status, push/pull skill changes, or verify symlinks. TRIGGER on: 'sync-skills', 'add skill', 'remove skill', 'skill management', 'list skills', 'custom skill'."
+description: "Manage self-authored AI coding agent skills with sync-skills. MUST trigger when the user wants to create a new managed skill, adopt an already-created skill, update an existing skill and save/sync it, diagnose broken skill visibility, or remove/unlink a skill. ALSO trigger when another workflow has just created, edited, or deleted a user skill directory or SKILL.md and lifecycle management must take over. Trigger on: 'sync-skills', 'create skill', 'new skill', 'make a skill', 'link skill', 'adopt skill', 'update skill', 'edit skill', 'commit skill', 'push skill', 'pull skill', 'remove skill', 'delete skill', 'unlink skill', 'repair skill links', 'manage skill lifecycle'."
 tools: [Bash]
 ---
 
 # sync-skills
 
-Custom skill lifecycle manager for AI coding agents. Manages user-created skills via git + symlink. Only manages skills explicitly added by the user.
+Repo-first lifecycle manager for self-authored AI coding agent skills.
 
-## Prerequisites
+Use this skill for:
 
-The `sync-skills` CLI must be installed:
+- create a managed skill
+- adopt an existing skill into management
+- save or sync skill updates through Git
+- inspect or repair lifecycle state
+- unlink or remove managed skills
+
+Do not use this skill for:
+
+- searching public skills
+- installing third-party skills one by one
+- `publish`, `import`, or `install-from-git`
+
+## Preflight checks
+
+Check `sync-skills` first:
+
+```bash
+command -v sync-skills >/dev/null 2>&1 && sync-skills --version
+```
+
+If missing, install with:
 
 ```bash
 uv tool install sync-skills
 ```
 
-## Important: Agent Execution Policy
+Development install:
 
-AI agents **cannot interact with stdin**, so follow this two-step pattern for **all mutating commands** (init, link, unlink, new, remove, doctor, push, pull):
+```bash
+uv tool install --editable /path/to/sync-skills
+```
 
-1. **First**: run with `--dry-run` to preview what will happen, show the output to the user
-2. **Then**: only after user confirms, re-run with `-y` to execute
+Check Git:
 
-**Read-only commands** (`list`, `status`) are safe to run directly without `-y` or `--dry-run`.
+```bash
+command -v git >/dev/null 2>&1
+```
 
-## Commands Reference
+If repo-level operations are about to run and setup is unclear:
 
-| User intent | Command | Type |
+```bash
+sync-skills init --dry-run
+sync-skills init -y
+```
+
+## Execution policy
+
+For mutating commands, always use:
+
+1. `--dry-run`
+2. show preview
+3. after confirmation, re-run with `-y`
+
+Mutating commands:
+
+- `init`
+- `new`
+- `link`
+- `unlink`
+- `remove`
+- `doctor`
+- `commit`
+- `push`
+- `pull`
+
+Read-only commands:
+
+- `list`
+- `status`
+
+## Current behavior to rely on
+
+- `doctor --dry-run` is truly read-only
+- `status` reports lifecycle states including `managed`, `unknown`, `orphaned`, `broken link`, `real directory conflict`, and `managed but not exposed`
+- `doctor` cleans orphaned state entries during real execution
+- `push` / `pull` provide explicit hints for missing remote, auth failure, detached HEAD, local changes, and missing remote branch
+
+## Decision table
+
+| Situation | Detection rule | Command path |
 |---|---|---|
-| List custom skills | `sync-skills list` | read |
-| Show git status | `sync-skills status` | read |
-| Initialize ~/Skills/ repo | `sync-skills init` (clone from remote or git init, idempotent) | mutate |
-| Link a skill (auto-scan by name) | `sync-skills link skill-name` | mutate |
-| Unlink a skill (restore files) | `sync-skills unlink skill-name` | mutate |
-| Unlink all skills | `sync-skills unlink --all` | mutate |
-| Create new custom skill | `sync-skills new skill-name -d "description"` | mutate |
-| Remove a skill permanently | `sync-skills remove skill-name` | mutate |
-| Remove multiple skills | `sync-skills remove a b c` | mutate |
-| Verify/repair symlinks | `sync-skills doctor` | mutate |
-| Commit and push | `sync-skills push -m "update"` | mutate |
-| Pull and rebuild | `sync-skills pull` | mutate |
+| Brand-new managed skill | No real skill exists yet | `new` |
+| Skill files already exist before lifecycle handling | Agent or user already created `SKILL.md` or the skill directory | `link` |
+| Managed skill content changed and user wants to save locally | Update without remote sync request | `status` -> `commit` |
+| Managed skill content changed and user wants backup / GitHub / another machine sync | Update with remote sync intent | `status` -> `push` |
+| Another machine needs latest state | Recovery / another computer / pull latest | `pull` -> `doctor` if needed |
+| User wants to inspect lifecycle health | Managed / broken / orphaned / visible / what changed | `status` |
+| User wants repair | Broken link / missing visibility / orphaned / repair | `doctor` |
+| User wants to stop managing but keep content | Retire from management, not full deletion | `unlink` |
+| User wants full removal | Clear deletion intent | `remove` |
 
-## Common Workflows
+## Routing priority
 
-### 1. Create a new custom skill
+1. If real skill files already exist, prefer `link` over `new`
+2. If the user wants local save only, prefer `commit`
+3. If the user wants GitHub / backup / another machine sync, prefer `push`
+4. If the user wants inspection first, prefer `status`
+5. If the user wants repair, prefer `doctor`
+6. If deletion intent is unclear, distinguish `unlink` vs `remove`
 
-```bash
-sync-skills new my-skill -d "My custom skill description" -t "tag1,tag2" --dry-run
-# show preview to user, wait for confirmation
-sync-skills new my-skill -d "My custom skill description" -t "tag1,tag2" -y
-```
+## Takeover rules
 
-Creates `~/Skills/skills/my-skill/SKILL.md` with skeleton and symlinks to all agent directories.
+If another workflow touches a skill first, this skill should take over immediately:
 
-### 2. Link a wild skill
+- created new skill content first -> continue into `new` or `link`
+- edited managed skill -> continue into `status` then `commit` or `push`
+- edited unmanaged existing skill -> continue into `link`
+- deleted files manually -> continue into `remove` or `unlink`
+- hit visibility or sync problems -> continue into `status` then `doctor`
 
-```bash
-sync-skills link my-skill --dry-run
-# show preview to user, wait for confirmation
-sync-skills link my-skill -y
-```
+## Agent examples
 
-Adopts a skill (existing in any agent directory or repo) into management. Auto-scans all agent directories and the repo for the named skill. If multiple versions exist, groups by content hash and lets the user choose (auto-selects latest with `-y`).
-
-### 3. Edit a skill (via agent)
-
-The agent edits `~/Skills/skills/my-skill/SKILL.md` normally. Changes flow through symlinks to all agent directories automatically.
-
-### 4. Push changes to GitHub
-
-```bash
-sync-skills status       # check what changed (read-only, safe)
-sync-skills push -m "update my-skill" --dry-run
-# show preview to user, wait for confirmation
-sync-skills push -m "update my-skill" -y
-```
-
-Shows full git commands (`git add -A`, `git commit -m "..."`, `git push -u origin <branch>`) before confirming.
-
-### 5. Pull changes from another machine
-
-```bash
-sync-skills pull --dry-run
-# show preview to user, wait for confirmation
-sync-skills pull -y
-```
-
-Shows full git command (`git pull --rebase`) before confirming. Automatically repairs symlinks after pull.
-
-### 6. Unlink a skill
-
-```bash
-sync-skills unlink my-skill --dry-run
-# show preview to user, wait for confirmation
-sync-skills unlink my-skill -y
-```
-
-Removes the skill from management. Files are restored to all agent directories as real files. The skill is removed from `~/Skills/skills/` and the state file.
-
-### 7. Verify and repair symlinks
-
-```bash
-sync-skills doctor --dry-run
-# show preview to user, wait for confirmation
-sync-skills doctor -y
-```
-
-Checks all managed skill symlinks, repairs broken links, detects state inconsistencies.
-
-## Flags
-
-| Flag | Purpose |
+| User says | Agent should do |
 |---|---|
-| `-y`, `--yes` | Skip confirmation |
-| `--dry-run` | Preview without executing |
-| `--copy` | Use legacy copy-based sync |
-| `--config PATH` | Use custom config file |
-| `--all` | Apply to all (unlink) |
-| `--message`, `-m` | Commit message (push command) |
-| `--description`, `-d` | Skill description (new command) |
-| `--tags`, `-t` | Comma-separated tags (new command) |
+| “帮我创建一个新的 skill，名字叫 `foo`” | `sync-skills new foo --dry-run` -> `sync-skills new foo -y` |
+| “帮我写一个新的 `SKILL.md`，然后纳入管理” | create files first -> `sync-skills link <name> --dry-run` -> `sync-skills link <name> -y` |
+| “这个 skill 我已经写好了，帮我接入 sync-skills” | `sync-skills link <name> --dry-run` -> `sync-skills link <name> -y` |
+| “我刚更新了 `foo`，帮我保存一下” | `sync-skills status` -> `sync-skills commit -m "update foo" --dry-run` -> `sync-skills commit -m "update foo" -y` |
+| “我更新了 `foo`，顺便同步到 GitHub” | `sync-skills status` -> `sync-skills push -m "update foo" --dry-run` -> `sync-skills push -m "update foo" -y` |
+| “我换电脑了，把最新 skill 拉下来” | `sync-skills pull --dry-run` -> `sync-skills pull -y` -> `sync-skills doctor --dry-run` / `sync-skills doctor -y` if needed |
+| “看看我现在哪些 skill 有问题” | `sync-skills status` |
+| “这些 skill 链接坏了，帮我修一下” | `sync-skills doctor --dry-run` -> `sync-skills doctor -y` |
+| “把 `foo` 删掉” | `sync-skills remove foo --dry-run` -> `sync-skills remove foo -y` |
+| “先别托管 `foo` 了，但内容保留” | `sync-skills unlink foo --dry-run` -> `sync-skills unlink foo -y` |
 
-## Architecture
+## Notes
 
-- **Custom skills**: stored in `~/Skills/` git repo, symlinked to all agent directories
-- **State file**: `~/.config/sync-skills/skills.json` tracks which skills are managed by sync-skills
-- **Single-layer symlink**: `~/Skills/skills/<name>` → `<agent-dir>/skills/<name>` (all agent dirs including `~/.agents/skills/`)
+- Prefer `status` before `commit`, `push`, and `pull`
+- Prefer `link` over `new` when the skill already exists
+- Prefer `remove` or `unlink` over manual directory deletion
+- Do not use removed aliases `fix` or `sync`
+- Treat `--copy` as legacy mode only
 
-## Config File
+## Paths
 
-Location: `~/.config/sync-skills/config.toml`
-
-```toml
-repo = "~/Skills"
-agents_dir = "~/.agents/skills"
-state_file = "~/.config/sync-skills/skills.json"
-```
+- repo root: `~/Skills`
+- managed skills: `~/Skills/skills/<name>/`
+- state file: `~/.config/sync-skills/skills.json`
+- common agent directories:
+  - `~/.agents/skills`
+  - `~/.claude/skills`
+  - `~/.codex/skills`
+  - `~/.gemini/skills`
+  - `~/.openclaw/skills`

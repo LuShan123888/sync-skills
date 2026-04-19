@@ -31,6 +31,7 @@
 - 版本管理：基于 Git 做提交、推送、拉取和回滚
 - 多机同步：通过远程仓库在多台设备之间保持一致
 - 生命周期管理：支持 link、unlink、remove、doctor、status 等日常操作
+- Agent 接管：项目自带 `skills/sync-skills/SKILL.md`，用于让 Agent 在创建、更新、删除 Skill 后自动衔接 `new`、`link`、`commit`、`push`、`remove`、`unlink`、`doctor`
 
 ## 工作模型
 
@@ -98,6 +99,7 @@ sync-skills doctor
 - 设计文档：[docs/DESIGN.md](docs/DESIGN.md)
 - 用户故事：[docs/USER_STORIES.md](docs/USER_STORIES.md)
 - 变更历史：[CHANGELOG.md](CHANGELOG.md)
+- Agent Skill 定义：[skills/sync-skills/SKILL.md](skills/sync-skills/SKILL.md)
 
 ---
 
@@ -134,6 +136,7 @@ One complete path:
 - Version management: use Git for commit, push, pull, and history-based recovery
 - Multi-device sync: keep the repository aligned across machines through a remote
 - Lifecycle operations: manage daily operations through `link`, `unlink`, `remove`, `doctor`, and `status`
+- Agent handoff: the repository ships `skills/sync-skills/SKILL.md` so an agent can continue into `new`, `link`, `commit`, `push`, `remove`, `unlink`, and `doctor` after creating, updating, or deleting a Skill
 
 ## Operating model
 
@@ -201,3 +204,4 @@ Under the current repo-first model, they are not mainline requirements.
 - Design: [docs/DESIGN.md](docs/DESIGN.md)
 - User stories: [docs/USER_STORIES.md](docs/USER_STORIES.md)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
+- Agent skill definition: [skills/sync-skills/SKILL.md](skills/sync-skills/SKILL.md)

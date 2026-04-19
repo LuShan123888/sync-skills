@@ -145,6 +145,23 @@ repo-first 带来的直接收益：
 - 单 Skill package publish/install
 - 远程依赖解析系统
 
+### 3.5 项目自带 `SKILL.md` 的角色
+
+仓库自带 `skills/sync-skills/SKILL.md`，它不是产品功能本身，而是项目对 Agent 的调用契约。
+
+它当前承担的职责是：
+
+- 提示 Agent 何时应该触发 `sync-skills`
+- 在“创建 / 更新 / 删除 Skill”之后，把流程接管到正确的生命周期命令
+- 约束 Agent 优先使用 `new`、`link`、`status`、`commit`、`push`、`pull`、`doctor`、`unlink`、`remove`
+- 在执行前先做 `sync-skills` / `git` 可用性检查，并在缺失时提供安装指引
+
+设计结论：
+
+- `SKILL.md` 是 Agent 工作流入口，不是另一套产品模型
+- `SKILL.md` 必须跟随当前实现同步更新，不能漂移到旧的 copy-mode 或单 Skill 发布叙事
+- 文档与 `SKILL.md` 的定位必须一致：都服务于 repo-first 的自建 Skill 生命周期管理
+
 ---
 
 ## 4. 当前命令模型
@@ -215,6 +232,19 @@ repo-first 带来的直接收益：
 
 - 这些命令可以是未来扩展
 - 但它们不是当前定位成立的前提
+
+### 4.4 Agent 路由约束
+
+项目当前要求 Agent 侧遵循如下路由：
+
+- brand-new Skill -> `new`
+- 已有真实 Skill 内容 -> `link`
+- 已管理 Skill 被更新 -> `status` 后进入 `commit` 或 `push`
+- 另一台机器恢复 -> `pull`，必要时继续 `doctor`
+- 停止托管但保留内容 -> `unlink`
+- 完整删除 -> `remove`
+
+这是当前 `skills/sync-skills/SKILL.md` 与产品文档需要共同表达的最小契约。
 
 ---
 

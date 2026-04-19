@@ -13,6 +13,7 @@
 - 正式将项目历史独立到独立的 `CHANGELOG.md` 文件，并将发布历史从 `docs/DESIGN.md` 中迁移。
 - 去除 `fix` / `sync` 兼容别名，不再将其映射到 `doctor`。
 - 重写 `docs/DESIGN.md`，将其对齐到当前代码实现，并移除历史演进内容。
+- 重写项目自带的 `skills/sync-skills/SKILL.md`，收敛为 Agent 路由决策表，并同步在 `README.md` 与 `docs/DESIGN.md` 中声明其角色，避免文档漂移。
 
 ### 修复
 - 将 `doctor --dry-run` 改为真正只读的预演模式，不再补登记状态、不再修复 symlink，也不再修改目录结构。
