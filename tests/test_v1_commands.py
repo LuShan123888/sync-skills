@@ -74,14 +74,17 @@ class TestV1DoctorNoPendingWorkCommand:
 
 
 class TestV1StatusCommand:
-    def test_status_shows_broken_links_orphaned_and_unregistered(self, tmp_path, capsys):
+    def test_status_shows_lifecycle_states(self, tmp_path, capsys):
         from sync_skills.cli import cmd_status
         from sync_skills.state import add_managed
         import os
 
         repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
         git_init(repo)
+        add_skill("healthy-skill", config)
         add_skill("broken-skill", config)
+        add_skill("isolated-skill", config)
+        add_skill("conflict-skill", config)
 
         orphan = "orphan-skill"
         add_managed(orphan, config.state_file)
@@ -93,18 +96,32 @@ class TestV1StatusCommand:
         (agent_dirs[0] / "broken-skill").unlink()
         os.symlink(repo_skills / "missing-target", agent_dirs[0] / "broken-skill")
 
+        for agent_dir in agent_dirs:
+            (agent_dir / "isolated-skill").unlink()
+
+        (agent_dirs[1] / "conflict-skill").unlink()
+        (agent_dirs[1] / "conflict-skill").mkdir()
+        (agent_dirs[1] / "conflict-skill" / "SKILL.md").write_text("# conflict\n")
+
         config_path = tmp_path / "config.toml"
         save_config(config, config_path)
 
         cmd_status(argparse.Namespace(config=config_path))
         captured = capsys.readouterr()
 
-        assert "断链/缺失 symlink" in captured.out
-        assert "broken-skill" in captured.out
-        assert "状态不一致" in captured.out
+        assert "--- 生命周期状态 ---" in captured.out
+        assert "managed:" in captured.out
+        assert "unknown:" in captured.out
+        assert "orphaned:" in captured.out
+        assert "broken link:" in captured.out
+        assert "real directory conflict:" in captured.out
+        assert "managed but not exposed:" in captured.out
+        assert "healthy-skill [managed]" in captured.out
+        assert "broken-skill [managed, broken link]" in captured.out
         assert orphan in captured.out
-        assert "未登记" in captured.out
-        assert "repo-only" in captured.out
+        assert "repo-only [unknown]" in captured.out
+        assert "isolated-skill [managed, broken link, managed but not exposed]" in captured.out
+        assert "conflict-skill [managed, real directory conflict]" in captured.out
 
 
 class TestV1CommitCommand:

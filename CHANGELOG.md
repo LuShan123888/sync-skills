@@ -16,6 +16,7 @@
 
 ### 修复
 - 将 `doctor --dry-run` 改为真正只读的预演模式，不再补登记状态、不再修复 symlink，也不再修改目录结构。
+- 将 `status` 补齐为生命周期状态视图，显式报告 `managed`、`unknown`、`orphaned`、`broken link`、`real directory conflict` 和 `managed but not exposed`。
 
 ## [v1.1.3] - 2026-04-19
 软件包版本行：`0.5.20260418.4`

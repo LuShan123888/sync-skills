@@ -235,34 +235,85 @@ def cmd_status(args):
             for f in status.untracked:
                 print(f"  {f}")
 
-    # === Skill 管理状态 ===
+    # === Skill 生命周期状态 ===
     managed = get_managed_skills(config.state_file)
     all_classifications = classify_all_skills(managed, config.repo_skills_dir, config.effective_agent_dirs)
-
-    custom = [c for c in all_classifications if c.managed]
-
-    print(f"\n--- Skill 状态 ---")
-    print(f"已管理: {len(custom)}")
-    if custom:
-        for c in custom:
-            link = "✓" if c.has_custom_link else "✗"
-            print(f"  {link} {c.name}")
-
-    # === Symlink 健康 + 状态文件一致性 ===
     status_check = _check_state(config)
+    orphaned = set(status_check["orphaned"])
+    unregistered = set(status_check["unregistered"])
+    broken_link_agents = status_check["broken_link_agents"]
+    real_dir_conflict_agents = status_check["real_dir_conflict_agents"]
+    managed_but_not_exposed = set(status_check["managed_but_not_exposed"])
 
-    if status_check["broken_links"]:
-        print(f"\n断链/缺失 symlink: {len(status_check['broken_links'])}")
-        for item in status_check["broken_links"]:
-            print(f"  ✗ {item}")
-    if status_check["orphaned"]:
-        print(f"\n状态不一致: {len(status_check['orphaned'])} 个 skill 在状态文件中但仓库中不存在")
-        for name in status_check["orphaned"]:
-            print(f"  ! {name}")
-    if status_check["unregistered"]:
-        print(f"\n未登记: {len(status_check['unregistered'])} 个 skill 在仓库中但未纳入管理")
-        for name in status_check["unregistered"]:
-            print(f"  ? {name}")
+    lifecycle_rows = []
+    summary = {
+        "managed": 0,
+        "unknown": 0,
+        "orphaned": 0,
+        "broken link": 0,
+        "real directory conflict": 0,
+        "managed but not exposed": 0,
+    }
+
+    for skill in all_classifications:
+        labels = []
+        details = []
+
+        if skill.managed:
+            labels.append("managed")
+            summary["managed"] += 1
+        else:
+            labels.append("unknown")
+            summary["unknown"] += 1
+
+        if skill.name in orphaned:
+            labels.append("orphaned")
+            details.append("orphaned: 状态文件中存在，但仓库中不存在")
+            summary["orphaned"] += 1
+        else:
+            broken_agents = broken_link_agents.get(skill.name, [])
+            conflict_agents = real_dir_conflict_agents.get(skill.name, [])
+
+            if broken_agents:
+                labels.append("broken link")
+                details.append(f"broken link: {', '.join(broken_agents)}")
+                summary["broken link"] += 1
+
+            if conflict_agents:
+                labels.append("real directory conflict")
+                details.append(f"real directory conflict: {', '.join(conflict_agents)}")
+                summary["real directory conflict"] += 1
+
+            if skill.managed and skill.name in managed_but_not_exposed:
+                labels.append("managed but not exposed")
+                details.append("managed but not exposed: 当前没有任何 Agent 指向仓库中的正确 symlink")
+                summary["managed but not exposed"] += 1
+
+        if not skill.managed:
+            if skill.name in unregistered:
+                details.append("unknown: 仓库中存在，但未纳入管理")
+            elif skill.agent_path:
+                details.append(f"unknown: Agent 目录中存在，但未纳入管理 ({_unexpand_home(skill.agent_path)})")
+
+        lifecycle_rows.append((skill.name, labels, details))
+
+    print("\n--- 生命周期状态 ---")
+    for key in (
+        "managed",
+        "unknown",
+        "orphaned",
+        "broken link",
+        "real directory conflict",
+        "managed but not exposed",
+    ):
+        print(f"{key}: {summary[key]}")
+
+    if lifecycle_rows:
+        print("\n详情:")
+        for name, labels, details in lifecycle_rows:
+            print(f"  - {name} [{', '.join(labels)}]")
+            for detail in details:
+                print(f"      {detail}")
 
 
 def cmd_commit(args):
@@ -600,22 +651,43 @@ def _check_state(config: Config) -> dict:
 
     # Symlink 检查（仅检测）
     broken_links = []
+    broken_link_agents = {}
+    real_dir_conflict_agents = {}
+    managed_but_not_exposed = []
     for name in sorted(managed):
         repo_target = config.repo_skills_dir / name
         if not repo_target.is_dir():
             continue
         state = verify_links(name, config.repo_skills_dir, config.effective_agent_dirs)
-        for agent_name in (
+        broken_agents = (
             state.agent_links_broken
             + state.agent_links_missing
             + getattr(state, "agent_links_wrong_target", [])
-        ):
+        )
+        for agent_name in broken_agents:
             broken_links.append(f"{name}: {agent_name}")
+        if broken_agents:
+            broken_link_agents[name] = broken_agents
+
+        conflict_agents = []
+        for agent_dir in config.effective_agent_dirs:
+            link = agent_dir / name
+            if link.exists() and not link.is_symlink():
+                agent_name = agent_dir.parent.name.lstrip(".")
+                conflict_agents.append(agent_name)
+        if conflict_agents:
+            real_dir_conflict_agents[name] = conflict_agents
+
+        if not state.agent_links_ok:
+            managed_but_not_exposed.append(name)
 
     return {
         "orphaned": orphaned,
         "unregistered": unregistered,
         "broken_links": broken_links,
+        "broken_link_agents": broken_link_agents,
+        "real_dir_conflict_agents": real_dir_conflict_agents,
+        "managed_but_not_exposed": managed_but_not_exposed,
     }
 
 
