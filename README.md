@@ -1,14 +1,17 @@
 # sync-skills
 
-> 自定义 Skill 生命周期管理器 -- 通过 git + symlink 管理你的 AI Skills。
+> 自定义 Skill 生命周期管理器
+> 通过 git + symlink 管理你的 AI Skills。
 >
-> Custom Skill Lifecycle Manager -- manage your AI skills via git + symlink.
+> Custom Skill Lifecycle Manager
+> manage your AI skills via git + symlink.
 
 sync-skills v1.1 通过 git + symlink 管理用户自建的 Skill。sync-skills 只管理用户显式纳入的 Skill，其他 Skill（由任何工具管理）不受影响。
 
 ---
 
-## 为什么需要它 / Why
+## 为什么需要它
+## Why
 
 AI 编码工具（Claude Code、Codex CLI、Gemini CLI 等）都有自己的 skills 目录。用户自建的 Skill 缺少统一的管理方式：
 
@@ -42,7 +45,8 @@ sync-skills 的做法 -- **git + symlink**：
 
 ---
 
-## AI Agent 友好 / Agent-Friendly Design
+## AI Agent 友好
+## Agent-Friendly Design
 
 sync-skills 专为 AI 编码工具设计，支持两种 Agent 集成方式：
 
@@ -66,9 +70,11 @@ sync-skills 专为 AI 编码工具设计，支持两种 Agent 集成方式：
 
 ---
 
-## 快速开始 / Quick Start
+## 快速开始
+## Quick Start
 
-### 安装 / Install
+### 安装
+### Install
 
 ```bash
 # 推荐：通过 PyPI 安装
@@ -82,7 +88,8 @@ pip install -e .
 
 > 要求 Python >= 3.11
 
-### 初始化 / Init
+### 初始化
+### Init
 
 ```bash
 sync-skills init    # 初始化 ~/Skills/ 仓库（支持 git clone 远程仓库，可重复执行）
@@ -90,31 +97,40 @@ sync-skills init    # 初始化 ~/Skills/ 仓库（支持 git clone 远程仓库
 
 配置文件保存在 `~/.config/sync-skills/config.toml`，也可以手动编辑。
 
-### 使用 / Usage
+### 使用
+### Usage
 
 ```bash
-# 初始化 / Initialize
+# 初始化
+# Initialize
 sync-skills init
 
-# 纳入管理 / Link a skill (auto-scan by name)
+# 纳入管理
+# Link a skill (auto-scan by name)
 sync-skills link my-skill
 
-# 提交并推送（展示完整 git 命令） / Git commit + push (shows full git commands)
+# 提交并推送（展示完整 git 命令）
+# Git commit + push (shows full git commands)
 sync-skills push
 
-# 仅提交（展示变更 skill、时间、最近 commit） / Git commit only
+# 仅提交（展示变更 skill、时间、最近 commit）
+# Git commit only
 sync-skills commit
 
-# 拉取远程更新（展示完整 git 命令） / Git pull (shows full git commands)
+# 拉取远程更新（展示完整 git 命令）
+# Git pull (shows full git commands)
 sync-skills pull
 
-# 验证/修复 symlink + 检测异常 / Verify/repair + detect anomalies
+# 验证/修复 symlink + 检测异常
+# Verify/repair + detect anomalies
 sync-skills doctor
 
-# 列出自定义 Skill / List custom skills
+# 列出自定义 Skill
+# List custom skills
 sync-skills list
 
-# 查看 git 状态 + skill 管理状态 / Show git status and skill management state
+# 查看 git 状态 + skill 管理状态
+# Show git status and skill management state
 sync-skills status
 
 # 创建新 Skill（手动创建骨架）/ Create a new custom skill (from template)
@@ -129,7 +145,8 @@ sync-skills unlink my-skill
 
 ---
 
-## 架构 / Architecture
+## 架构
+## Architecture
 
 ### 目录结构
 
@@ -151,7 +168,8 @@ sync-skills unlink my-skill
 └── git-commit/              # --> ~/Skills/skills/git-commit/     (symlink)
 ```
 
-### 工作流 / Workflow
+### 工作流
+### Workflow
 
 1. **init** -- 初始化 `~/Skills/` git 仓库（可选 git clone 远程仓库），自动注册所有 repo 中的 skill，建立/修复 symlink
 2. **link** -- 按名称自动扫描 Skill（复制到 git 仓库 + 删除其他副本 + 创建 symlink），多版本时 MD5 分组 + mtime 排序让用户选择
@@ -167,7 +185,8 @@ sync-skills unlink my-skill
 
 ---
 
-## 对比其他方案 / Comparison
+## 对比其他方案
+## Comparison
 
 ### vs 软链接（手动 Symlinks）
 
@@ -191,7 +210,8 @@ sync-skills unlink my-skill
 
 ---
 
-## 参数 / Options
+## 参数
+## Options
 
 ### v1.1 命令
 
@@ -233,7 +253,8 @@ sync-skills unlink my-skill
 | `sync-skills fix` | `sync-skills doctor` |
 | `sync-skills sync` | `sync-skills doctor` |
 
-### 默认目录 / Default Directories
+### 默认目录
+### Default Directories
 
 | 角色 | 路径 |
 |------|------|
@@ -245,7 +266,8 @@ sync-skills unlink my-skill
 
 ---
 
-## 配置文件 / Config
+## 配置文件
+## Config
 
 配置文件保存在 `~/.config/sync-skills/config.toml`：
 
@@ -261,7 +283,8 @@ state_file = "~/.config/sync-skills/skills.json"
 
 ---
 
-## 安全机制 / Safety
+## 安全机制
+## Safety
 
 - **Git 命令预览** -- `push` 和 `pull` 执行前展示完整 git 命令，用户确认后才执行
 - **操作前后验证** -- `new`/`remove`/`unlink` 后自动验证状态；`pull` 前检查状态，有异常则警告
@@ -274,7 +297,8 @@ state_file = "~/.config/sync-skills/skills.json"
 
 ---
 
-## 开发 / Development
+## 开发
+## Development
 
 ```bash
 uv run pytest tests/ -v    # 运行测试（204 个用例）
