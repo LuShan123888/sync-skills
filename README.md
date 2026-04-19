@@ -1,557 +1,203 @@
 # sync-skills
 
-> 自定义 Skill 生命周期管理器。
-> 通过 git + symlink 管理你的 AI Skills。
+自建 Skill 的全生命周期管理器。
 
-sync-skills v1.1 通过 git + symlink 管理用户自建的 Skill。
-sync-skills 只管理用户显式纳入的 Skill，其他 Skill（由任何工具管理）不受影响。
+它不是一个“下载别人 Skill 的工具”，也不是一个 Skill 商店。  
+它解决的是另一类问题：你自己写出来的 Skill，怎么持续迭代、怎么给多个本地 Agent 使用、怎么放到 GitHub 做备份与分享、怎么在多台电脑之间同步。
 
----
+## 一句话定位
 
-## 为什么需要它
+`sync-skills` 是一个 `author-first`、`Git-first`、`repo-first` 的 Skill 管理工具。
 
-AI 编码工具（Claude Code、Codex CLI、Gemini CLI 等）都有自己的 skills 目录。用户自建的 Skill 缺少统一的管理方式。
+- `author-first`：先服务“我自己写 Skill、我自己维护 Skill”这件事
+- `Git-first`：版本管理、备份、协作、跨设备同步都建立在 Git 之上
+- `repo-first`：当前分发粒度是“整个个人 Skill 仓库”，不是单个 Skill 包
 
-```text
-:/  自己写的 skill 分散在各个工具目录里
-:/  换台电脑，之前的自定义 skill 可能都丢失
-:/  需要版本管理，但工具目录是平铺的，不适合直接 git 管理
-```
+## 它打通了什么
 
-sync-skills 的做法是 **git + symlink**：
+一条完整主线：
 
-```text
-~/Skills/skills/             <-- 自定义 Skill 仓库（git 仓库，唯一真实来源）
-├── english-buddy/
-│   └── SKILL.md
-└── git-commit/
-    └── SKILL.md
+1. 创建一个新 Skill
+2. 在本地持续修改和迭代
+3. 让多个 Agent 同时可见
+4. 把整个 Skill 仓库推到 GitHub
+5. 在另一台电脑上继续拉取和使用
+6. 在不再需要时解绑、删除或下线
 
-~/.agents/skills/            <-- Agent Skill 目录（与 ~/.claude/skills 同等地位）
-├── english-buddy/           --> ~/Skills/skills/english-buddy/  (symlink)
-└── git-commit/              --> ~/Skills/skills/git-commit/     (symlink)
+## 核心能力
 
-~/.claude/skills/            <-- Agent Skill 目录
-├── english-buddy/           --> ~/Skills/skills/english-buddy/  (symlink)
-└── git-commit/              --> ~/Skills/skills/git-commit/     (symlink)
-```
+- 创建与纳管：创建新 Skill，或把已有 Skill 纳入统一管理
+- 本地分发：通过符号链接把同一个 Skill 暴露给多个 Agent
+- 版本管理：基于 Git 做提交、推送、拉取和回滚
+- 多机同步：通过远程仓库在多台设备之间保持一致
+- 生命周期管理：支持 link、unlink、remove、doctor、status 等日常操作
 
-- **自定义 Skill** 存放在 `~/Skills/` git 仓库中，并通过 symlink 关联到所有 Agent 目录。
-- **版本控制** 所有自定义 Skill 均在 git 仓库中，天然支持版本管理和多设备同步。
-- **零拷贝** symlink 不占额外空间，修改即刻生效。
+## 工作模型
 
----
+当前模型很明确：
 
-## AI Agent 友好
+- 你维护一个自己的 Skill 仓库
+- 仓库里的 Skill 是事实源
+- 各个 Agent 目录通过 symlink 使用这些 Skill
+- GitHub 远程仓库用于备份、分享和跨设备同步
 
-sync-skills 专为 AI 编码工具设计，支持两种 Agent 集成方式。
+这意味着当前主线不是：
 
-### 内置 Skill
+- 搜索别人发布的 Skill
+- 像包管理器一样安装单个第三方 Skill
+- 维护一个中心化 Skill registry
 
-项目附带 `skills/sync-skills/SKILL.md`，可安装到任意 AI 编码工具中。安装后，Agent 可以根据自然语言直接操作：
+这些不是当前产品主线。
 
-```text
-用户: "同步一下 skills"       --> Agent 执行: sync-skills push -y
-用户: "拉取远程更新"          --> Agent 执行: sync-skills pull -y
-用户: "新建一个 skill"        --> Agent 执行: sync-skills new my-skill
-用户: "看看有什么 skill"      --> Agent 执行: sync-skills list
-```
-
-### Agent 友好的 CLI
-
-- **`--help`** 输出结构化文本，包含完整示例，便于 Agent 解析。
-- **`-y`** 跳过交互确认：Agent 无法操作 stdin，`-y` 确保非阻塞执行。
-- **`list`**：结构化输出，便于 Agent 查询 skill 状态。
-- **`status`**：显示 git 状态 + skill 管理状态，便于 Agent 全面了解。
-
----
-
-## 快速开始
-
-### 安装
+## 最小使用流程
 
 ```bash
-# 推荐：通过 PyPI 安装
-uv tool install sync-skills
-
-# 或从源码安装
-git clone https://github.com/LuShan123888/sync-skills.git
-cd sync-skills
-pip install -e .
-```
-
-> 要求 Python >= 3.11
-
-### 初始化
-
-```bash
-sync-skills init    # 初始化 ~/Skills/ 仓库（支持 git clone 远程仓库，可重复执行）
-```
-
-配置文件保存在 `~/.config/sync-skills/config.toml`，也可以手动编辑。
-
-### 使用
-
-```bash
-# 初始化
 sync-skills init
-
-# 纳入管理（按名称自动扫描）
-sync-skills link my-skill
-
-# 提交并推送（展示完整 git 命令）
-sync-skills push
-
-# 仅提交（展示变更 skill、时间、最近 commit）
-sync-skills commit
-
-# 拉取远程更新（展示完整 git 命令）
-sync-skills pull
-
-# 验证与修复 symlink + 检测异常
-sync-skills doctor
-
-# 列出自定义 Skill
-sync-skills list
-
-# 查看 git 状态 + skill 管理状态
-sync-skills status
-
-# 创建新 Skill（手动创建骨架）
 sync-skills new my-skill
-
-# 删除 Skill（彻底删除）
-sync-skills remove my-skill
-
-# 卸载 Skill（移除管理，还原文件）
-sync-skills unlink my-skill
+sync-skills status
+sync-skills commit
+sync-skills push
 ```
 
----
-
-## 架构
-
-### 目录结构
-
-```text
-~/Skills/                    # 自定义 Skill 仓库（git 仓库，唯一真实存储）
-├── skills/
-│   ├── english-buddy/
-│   │   └── SKILL.md
-│   └── git-commit/
-│       └── SKILL.md
-└── .git/
-
-~/.agents/skills/            # Agent Skill 目录（与 ~/.claude/skills 同等地位）
-├── english-buddy/           --> ~/Skills/skills/english-buddy/  (symlink)
-└── git-commit/              --> ~/Skills/skills/git-commit/     (symlink)
-
-~/.claude/skills/            # Agent Skill 目录
-├── english-buddy/           --> ~/Skills/skills/english-buddy/  (symlink)
-└── git-commit/              --> ~/Skills/skills/git-commit/     (symlink)
-```
-
-### 工作流
-
-1. **init**：初始化 `~/Skills/` git 仓库（可选 git clone 远程仓库），自动注册 repo 内全部 skill 并建立/修复 symlink。
-2. **link**：按名称自动扫描 skill（复制到 git 仓库、清理其它副本、创建 symlink）；多版本时按 MD5 分组并按时间排序供用户选择。
-3. **commit**：展示影响的 skill、修改时间、最近 commit，并预览 `git add`/`commit`，确认后执行。
-4. **push**：展示完整 git 命令（`git add`/`commit`/`push`），确认后执行。
-5. **pull**：展示完整 git 命令（`git pull --rebase`），确认后执行，并修复 symlink。
-6. **doctor**：验证所有 symlink，自动修复断裂链接，并检测状态不一致。
-7. **list**：列出所有自定义 Skill。
-8. **status**：显示 git 状态 + skill 管理状态 + 断链检测。
-9. **new**：在 `~/Skills/skills/` 创建 skill 骨架，并建立 symlink。
-10. **remove**：彻底删除 skill（删除仓库文件 + 所有 symlink）。
-11. **unlink**：移除管理关系，文件还原到所有 Agent 目录。
-
----
-
-## 对比其他方案
-
-### 与手动 Symlink 的对比
-
-| 项目 | 手动 Symlink | sync-skills v1.1 |
-|---|---|---|
-| **版本控制** | 无，换设备就丢失 | git 仓库，支持版本管理和多设备同步 |
-| **新建 Skill** | 手动创建目录、写文件、建 N 条链接 | `sync-skills new` 一条命令完成 |
-| **删除 Skill** | 手动删文件、清除断链 | `sync-skills remove` 自动清理 |
-| **卸载 Skill** | 手动还原文件、删除链接 | `sync-skills unlink` 还原文件到所有 Agent 目录 |
-| **多设备同步** | 不支持 | `push` / `pull` 一键同步 |
-| **维护成本** | 每次变更手动执行 | 自动化，近似零维护 |
-
-### 与 v0.6 复制模式对比
-
-| 项目 | v0.6 复制模式 | v1.1 git + symlink |
-|---|---|---|
-| **存储** | 复制 N 份真实文件 | symlink，零拷贝 |
-| **版本管理** | 不支持 | git 原生支持 |
-| **一致性** | 依赖手动或定时同步 | symlink 保证实时一致 |
-| **磁盘占用** | N 倍（N = 工具数） | 1 倍 |
-
----
-
-## 参数
-
-### v1.1 命令
-
-| 命令 | 说明 |
-|------|------|
-| `sync-skills init` | 初始化 ~/Skills/ 仓库（可重复执行；有远程仓库时自动 clone 并注册所有 skill） |
-| `sync-skills link <name>` | 纳入 skill（按名称自动扫描，多版本时让用户选择；`-y` 跳过确认） |
-| `sync-skills commit [-m MSG]` | `git add` + `commit`（预览变更 skill、时间、最近 commit，确认后执行） |
-| `sync-skills push [-m MSG]` | `git commit` + `push`（展示完整 git 命令，确认后执行） |
-| `sync-skills pull` | `git pull`（展示完整 git 命令，确认后执行）+ 修复 symlinks |
-| `sync-skills doctor` | 验证/修复 symlink + 检测状态不一致 |
-| `sync-skills list [--tags TAG]` | 列出所有自定义 Skill |
-| `sync-skills status` | 显示 git 状态 + skill 管理状态 + 断链检测 |
-| `sync-skills new <name>` | 创建新 custom skill（手动创建骨架） |
-| `sync-skills remove <name>` | 彻底删除 custom skill（支持多个；`-y` 跳过确认） |
-| `sync-skills unlink [name]` | 移除管理，还原文件（`name` 可省略或 `--all`） |
-
-### 通用选项
-
-| 参数 | 说明 |
-|------|------|
-| `-y`, `--yes` | 跳过交互确认 |
-| `--config PATH` | 配置文件路径（默认 `~/.config/sync-skills/config.toml`） |
-| `--dry-run` | 预览模式，不执行任何操作 |
-
-### 遗留命令（--copy 模式）
-
-| 命令 | 说明 |
-|------|------|
-| `sync-skills --copy` | v0.6 双向复制同步 |
-| `sync-skills --copy --force` | v0.6 强制同步 |
-| `sync-skills --copy --delete <name>` | v0.6 删除 skill |
-| `sync-skills --copy --dry-run` | v0.6 预览模式 |
-
-### 默认目录
-
-| 角色 | 路径 |
-|------|------|
-| 自定义 Skill 仓库 | `~/Skills` |
-| Agent Skill 目录 | `~/.agents/skills` |
-| Claude Code | `~/.claude/skills` |
-| Codex CLI | `~/.codex/skills` |
-| Gemini CLI | `~/.gemini/skills` |
-
----
-
-## 配置文件
-
-配置文件保存在 `~/.config/sync-skills/config.toml`：
-
-```toml
-repo = "~/Skills"
-agents_dir = "~/.agents/skills"
-state_file = "~/.config/sync-skills/skills.json"
-```
-
-- `repo`：自定义 Skill 的 git 仓库路径。
-- `agents_dir`：保留字段（向后兼容）。
-- `state_file`：状态文件路径（记录已管理的 skill）。
-
----
-
-## 安全机制
-
-- **Git 命令预览**：`push` 和 `pull` 执行前展示完整 git 命令，用户确认后才执行。
-- **操作前后验证**：`new`/`remove`/`unlink` 后自动验证状态；`pull` 前检查状态，有异常则警告。
-- **Symlink 验证**：`doctor` 检查所有 symlink，修复断裂链接。
-- **断链检测**：`doctor` 和 `status` 自动检测断链并提示清理。
-- **状态一致性**：`doctor` 检测状态文件与真实状态不一致。
-- **Git 保障**：所有自定义 Skill 变更都有 git 历史可回溯。
-- **存量仓库保护**：`init` 检查 git 状态，避免未提交或落后时误操作。
-- **隐藏目录过滤**：自动跳过 `.system/` 等隐藏目录。
-
----
-
-## 开发
+如果你换了一台电脑，主线通常是：
 
 ```bash
-uv run pytest tests/ -v    # 运行测试（204 个用例）
+sync-skills init
+sync-skills pull
+sync-skills doctor
 ```
 
-## 许可证
+## 当前命令
 
-MIT
+| 命令 | 作用 |
+| --- | --- |
+| `init` | 初始化或接入个人 Skill 仓库 |
+| `new` | 创建新的 Skill |
+| `link` | 将已有 Skill 纳入管理并分发到 Agent |
+| `unlink` | 解除指定 Agent 侧的可见性 |
+| `remove` | 从管理体系中删除 Skill |
+| `status` | 查看当前 Skill、链接和状态 |
+| `doctor` | 诊断并修复本地状态问题 |
+| `commit` | 提交当前仓库改动 |
+| `push` | 推送整个 Skill 仓库到远程 |
+| `pull` | 从远程拉取整个 Skill 仓库 |
+
+## 为什么现在不需要 `publish` / `import` / `install-from-git`
+
+因为当前分发模型已经足够清晰：
+
+- `init`：建立本地管理基线
+- `push`：把整个仓库放到远程
+- `pull`：在别的设备继续使用同一个仓库
+
+只有当产品将来要支持“单个 Skill 的独立发布、独立安装、独立引用”时，`publish` / `import` / `install-from-git` 才会变成必要能力。  
+在当前的 repo-first 模型下，它们不是主线需求。
+
+## 文档
+
+- 设计文档：[docs/DESIGN.md](docs/DESIGN.md)
+- 用户故事：[docs/USER_STORIES.md](docs/USER_STORIES.md)
+- 变更历史：[CHANGELOG.md](CHANGELOG.md)
 
 ---
 
 # sync-skills
 
-> Custom Skill Lifecycle Manager.
-> Manage your AI Skills via git + symlink.
+The lifecycle manager for self-authored Skills.
 
-sync-skills v1.1 manages user-created Skills via git + symlink.
-sync-skills manages only explicitly adopted skills; other Skills managed by other tools are untouched.
+This is not a tool for downloading other people's Skills, and it is not a Skill marketplace.  
+It solves a different problem: once you create your own Skill, how do you iterate on it, expose it to multiple local agents, back it up or share it through GitHub, and keep it synced across multiple machines?
 
-## Why
+## Positioning
 
-AI coding tools (Claude Code, Codex CLI, Gemini CLI, etc.) each have their own skills directories. User-created skills lack a unified management approach.
+`sync-skills` is an `author-first`, `Git-first`, `repo-first` Skill manager.
 
-```text
-:/  User-created skills are scattered across tool directories.
-:/  Switching machines may lose previously created custom skills.
-:/  Version control is needed, but the flat tool directories are not suitable for direct git management.
-```
+- `author-first`: built for people who create and maintain their own Skills
+- `Git-first`: versioning, backup, collaboration, and multi-device sync are all based on Git
+- `repo-first`: the current distribution unit is the whole personal Skill repository, not an individual Skill package
 
-sync-skills uses **git + symlink**:
+## What it covers
 
-```text
-~/Skills/skills/             <-- Custom skill repository (git repository, single source of truth)
-├── english-buddy/
-│   └── SKILL.md
-└── git-commit/
-    └── SKILL.md
+One complete path:
 
-~/.agents/skills/            <-- Agent skill directory (same status as ~/.claude/skills)
-├── english-buddy/           --> ~/Skills/skills/english-buddy/  (symlink)
-└── git-commit/              --> ~/Skills/skills/git-commit/     (symlink)
+1. Create a new Skill
+2. Keep iterating on it locally
+3. Make it visible to multiple agents
+4. Push the whole Skill repository to GitHub
+5. Pull and continue using it on another machine
+6. Unlink, remove, or retire it when it is no longer needed
 
-~/.claude/skills/            <-- Agent skill directory
-├── english-buddy/           --> ~/Skills/skills/english-buddy/  (symlink)
-└── git-commit/              --> ~/Skills/skills/git-commit/     (symlink)
-```
+## Core capabilities
 
-- **Custom skills** are stored in the `~/Skills/` git repository and linked to all Agent directories.
-- **Version control**: all custom skills are in git, with built-in versioning and multi-device sync.
-- **Zero-copy**: symlinks use no extra space and take effect immediately.
+- Creation and adoption: create a new Skill or bring an existing one under management
+- Local distribution: expose the same Skill to multiple agents through symlinks
+- Version management: use Git for commit, push, pull, and history-based recovery
+- Multi-device sync: keep the repository aligned across machines through a remote
+- Lifecycle operations: manage daily operations through `link`, `unlink`, `remove`, `doctor`, and `status`
 
----
+## Operating model
 
-## Agent-Friendly Design
+The current model is explicit:
 
-sync-skills is designed for AI coding tools and supports two integration patterns.
+- You maintain one personal Skill repository
+- Skills inside that repository are the source of truth
+- Agent directories consume those Skills through symlinks
+- The GitHub remote is used for backup, sharing, and multi-device sync
 
-### Built-in Skill
+This means the current product is not centered on:
 
-The project includes `skills/sync-skills/SKILL.md`, which can be installed as a skill in any AI coding tool. After installation, Agents can operate it using natural language:
+- discovering Skills published by others
+- installing a single third-party Skill like a package manager
+- maintaining a centralized Skill registry
 
-```text
-User: "Sync skills"            --> Agent executes: sync-skills push -y
-User: "Pull remote updates"    --> Agent executes: sync-skills pull -y
-User: "Create a skill"         --> Agent executes: sync-skills new my-skill
-User: "Show available skills"  --> Agent executes: sync-skills list
-```
+Those are not the mainline product goals today.
 
-### Agent-friendly CLI
-
-- **`--help`** outputs structured English text with examples, optimized for Agent parsing.
-- **`-y`** skips interactive confirmation: Agents cannot provide stdin input, so `-y` ensures non-blocking execution.
-- **`list`** provides structured output for querying skill states.
-- **`status`** shows git and management state for full visibility.
-
----
-
-## Quick Start
-
-### Install
+## Minimal workflow
 
 ```bash
-# Install from PyPI
-uv tool install sync-skills
-
-# Or install from source
-git clone https://github.com/LuShan123888/sync-skills.git
-cd sync-skills
-pip install -e .
-```
-
-> Python >= 3.11 required
-
-### Init
-
-```bash
-sync-skills init    # Initialize the ~/Skills/ repo (supports remote clone, idempotent)
-```
-
-Config is stored at `~/.config/sync-skills/config.toml`, and can be edited manually.
-
-### Usage
-
-```bash
-# Initialize
 sync-skills init
-
-# Adopt a skill by name
-sync-skills link my-skill
-
-# Commit and push (shows full git commands)
-sync-skills push
-
-# Commit only (show changed skills, timestamps, recent commits)
-sync-skills commit
-
-# Pull remote updates (shows full git commands)
-sync-skills pull
-
-# Verify and repair symlinks
-sync-skills doctor
-
-# List custom skills
-sync-skills list
-
-# Show git status and skill management status
-sync-skills status
-
-# Create a new skill skeleton
 sync-skills new my-skill
-
-# Remove a skill permanently
-sync-skills remove my-skill
-
-# Unlink a custom skill (restore files)
-sync-skills unlink my-skill
+sync-skills status
+sync-skills commit
+sync-skills push
 ```
 
----
-
-## Architecture
-
-### Directory Layout
-
-```text
-~/Skills/                    # Custom skill repository (git repository, single source of truth)
-├── skills/
-│   ├── english-buddy/
-│   │   └── SKILL.md
-│   └── git-commit/
-│       └── SKILL.md
-└── .git/
-
-~/.agents/skills/            # Agent skill directory (same status as ~/.claude/skills)
-├── english-buddy/           --> ~/Skills/skills/english-buddy/  (symlink)
-└── git-commit/              --> ~/Skills/skills/git-commit/     (symlink)
-
-~/.claude/skills/            # Agent skill directory
-├── english-buddy/           --> ~/Skills/skills/english-buddy/  (symlink)
-└── git-commit/              --> ~/Skills/skills/git-commit/     (symlink)
-```
-
-### Workflow
-
-1. **init**: Initialize the `~/Skills/` git repository (optionally clone remote), register all skills in repo, and create/repair symlinks.
-2. **link**: auto-scan by name, move/copy into git repo, clean other copies, create symlink; when there are multiple versions, group by MD5 and sort by mtime for user selection.
-3. **commit**: show affected skills, timestamps, recent commit, and preview `git add`/`commit` before confirmation.
-4. **push**: show full git commands (`git add`/`commit`/`push`) and execute after confirmation.
-5. **pull**: show full git command (`git pull --rebase`), execute after confirmation, then repair symlinks.
-6. **doctor**: verify all symlinks and auto-repair broken links, detect inconsistent state.
-7. **list**: list all custom skills.
-8. **status**: show git state, skill management state, and broken-link checks.
-9. **new**: create skill skeleton under `~/Skills/skills/` and create symlinks.
-10. **remove**: remove the skill completely (delete repo files and all symlinks).
-11. **unlink**: remove management and restore files to all Agent directories.
-
----
-
-## Comparison
-
-### vs manual symlink
-
-| Item | Manual symlink | sync-skills v1.1 |
-|---|---|---|
-| **Version control** | None; lost when switching devices | git repo with built-in versioning and multi-device sync |
-| **Create a skill** | Manually create directories/files and N links | `sync-skills new` completes it in one command |
-| **Delete a skill** | Manually delete files and clear broken links | `sync-skills remove` auto-cleans |
-| **Uninstall a skill** | Manual restore files and delete links | `sync-skills unlink` restores files to all Agent dirs |
-| **Multi-device sync** | Not supported | One-command sync via `push` / `pull` |
-| **Maintenance cost** | Manual execution for every change | Automated, near-zero maintenance |
-
-### vs v0.6 copy mode
-
-| Item | v0.6 copy mode | v1.1 git + symlink |
-|---|---|---|
-| **Storage** | N copies of real files | symlink, zero-copy |
-| **Version control** | Not supported | Supported by git natively |
-| **Consistency** | Depends on manual/periodic sync | symlink keeps state synchronized in real time |
-| **Disk usage** | Nx (N = number of tools) | 1x |
-
----
-
-## Options
-
-### v1.1 Commands
-
-| Command | Description |
-|------|------|
-| `sync-skills init` | Initialize the ~/Skills repo (idempotent; auto clone remote and register all skills) |
-| `sync-skills link <name>` | Adopt a skill by name (auto scan; choose from multi-version candidates; `-y` skips confirmation) |
-| `sync-skills commit [-m MSG]` | `git add` + `commit` (preview changed skills, timestamps, recent commits, execute on confirmation) |
-| `sync-skills push [-m MSG]` | `git commit` + `push` (show full git commands, execute on confirmation) |
-| `sync-skills pull` | `git pull` (show full git command, execute on confirmation) + repair symlinks |
-| `sync-skills doctor` | Verify and repair symlinks, detect state inconsistencies |
-| `sync-skills list [--tags TAG]` | List all custom skills |
-| `sync-skills status` | Show git status + management state + broken-link checks |
-| `sync-skills new <name>` | Create a new skill skeleton |
-| `sync-skills remove <name>` | Remove a skill permanently (multiple names supported; `-y` skips confirmation) |
-| `sync-skills unlink [name]` | Remove management and restore files (`name` optional or `--all`) |
-
-### Common Options
-
-| Option | Description |
-|------|------|
-| `-y`, `--yes` | Skip interactive confirmation |
-| `--config PATH` | Config file path (default `~/.config/sync-skills/config.toml`) |
-| `--dry-run` | Preview mode; no changes are applied |
-
-### Legacy Commands (`--copy`)
-
-| Command | Description |
-|------|------|
-| `sync-skills --copy` | v0.6 bidirectional copy sync |
-| `sync-skills --copy --force` | v0.6 forced sync |
-| `sync-skills --copy --delete <name>` | v0.6 delete skill |
-| `sync-skills --copy --dry-run` | v0.6 dry-run mode |
-
-### Default Directories
-
-| Role | Path |
-|------|------|
-| Custom skill repository | `~/Skills` |
-| Agent skill directory | `~/.agents/skills` |
-| Claude Code | `~/.claude/skills` |
-| Codex CLI | `~/.codex/skills` |
-| Gemini CLI | `~/.gemini/skills` |
-
----
-
-## Config
-
-Config is stored in `~/.config/sync-skills/config.toml`:
-
-```toml
-repo = "~/Skills"
-agents_dir = "~/.agents/skills"
-state_file = "~/.config/sync-skills/skills.json"
-```
-
-- `repo`: path to custom skill git repository.
-- `agents_dir`: reserved field for backward compatibility.
-- `state_file`: path to state file (records managed skills).
-
----
-
-## Safety
-
-- **Git command preview**: `push` and `pull` show full git commands before execution and require user confirmation.
-- **Pre/Post verification**: `new`/`remove`/`unlink` auto-verify state; `pull` checks state beforehand and warns on abnormalities.
-- **Symlink checks**: `doctor` checks all symlinks and repairs broken links.
-- **Broken-link detection**: `doctor` and `status` detect broken links and suggest cleanup.
-- **State consistency**: `doctor` detects mismatch between state file and actual filesystem.
-- **Git-backed safety**: all managed skill changes are fully traceable and rollback-safe.
-- **Legacy-repo protection**: `init` validates git state and avoids operating on dirty or stale repos.
-- **Hidden directory filtering**: automatically skip `.system/` and other hidden directories.
-
----
-
-## Development
+On another machine, the mainline usually looks like:
 
 ```bash
-uv run pytest tests/ -v    # run tests (204 cases)
+sync-skills init
+sync-skills pull
+sync-skills doctor
 ```
 
-## License
+## Current commands
 
-MIT
+| Command | Purpose |
+| --- | --- |
+| `init` | Initialize or attach to a personal Skill repository |
+| `new` | Create a new Skill |
+| `link` | Bring an existing Skill under management and expose it to agents |
+| `unlink` | Remove visibility from a specific agent side |
+| `remove` | Remove a Skill from the managed lifecycle |
+| `status` | Inspect current Skills, links, and state |
+| `doctor` | Diagnose and repair local state problems |
+| `commit` | Commit current repository changes |
+| `push` | Push the whole Skill repository to the remote |
+| `pull` | Pull the whole Skill repository from the remote |
+
+## Why `publish` / `import` / `install-from-git` are not required yet
+
+Because the current distribution model is already coherent:
+
+- `init`: establish local management
+- `push`: send the whole repository to a remote
+- `pull`: continue using the same repository on another device
+
+`publish`, `import`, and `install-from-git` only become necessary if the product later moves to independent publishing, installation, or referencing at the single-Skill level.  
+Under the current repo-first model, they are not mainline requirements.
+
+## Documents
+
+- Design: [docs/DESIGN.md](docs/DESIGN.md)
+- User stories: [docs/USER_STORIES.md](docs/USER_STORIES.md)
+- Changelog: [CHANGELOG.md](CHANGELOG.md)
