@@ -1,14 +1,14 @@
 # Project Memory
 
-This file includes project-specific memory migrated from Claude project memory on 2026-04-17.
-Use it for `~/Code/sync-skills` only. Rely on `~/.codex/AGENTS.md` for global user preferences.
+This file includes project-specific memory for `~/Code/sync-skills`.
+Use it only for this repository. Rely on `~/.codex/AGENTS.md` for global user preferences.
 
 ## Project Overview
 
 - `sync-skills` is a custom skill lifecycle manager for AI coding agents.
 - It is a package-based CLI under `src/sync_skills/`.
 - Python requirement is `>= 3.11`; it depends on `PyYAML`.
-- Known project state from migrated memory: v1.1.1, around 209 tests.
+- Historical notes in older memory snapshots may lag behind the current repository state.
 
 ## Critical Commands
 
@@ -17,7 +17,15 @@ Use it for `~/Code/sync-skills` only. Rely on `~/.codex/AGENTS.md` for global us
 
 ## Read Before Changing Behavior
 
-- Read `docs/DESIGN.md`, especially section 7 "变更日志", before making behavior changes in a new session.
+- Read `CHANGELOG.md` first to understand recent functional changes.
+- Read `docs/DESIGN.md` when you need architecture or design context behind those changes.
+
+## Documentation Responsibilities
+
+- User-visible release history belongs in `CHANGELOG.md`.
+- Architecture background and design rationale belong in `docs/DESIGN.md`.
+- If history is missing, reconstruct it from Git before updating docs.
+- Do not mix changelog entries and design records into one file again.
 
 ## Commit Rules
 
@@ -40,20 +48,12 @@ Use it for `~/Code/sync-skills` only. Rely on `~/.codex/AGENTS.md` for global us
 - `src/sync_skills/state.py`: state file management.
 - `src/sync_skills/classification.py`: skill classification.
 - `src/sync_skills/git_ops.py`: git operations.
-- `docs/DESIGN.md`: design notes and change log.
+- `src/sync_skills/metadata.py`: frontmatter parsing and selective sync metadata.
+- `CHANGELOG.md`: formal release and update history.
+- `docs/DESIGN.md`: architecture background and design rationale.
 
-## Known Constraints And Pitfalls
+## Notes
 
-- Preserve legacy CLI compatibility:
-  - old flags like `--source`, `--force`, `--delete`, `-d`, `-f`
-  - old subcommands like `init`, `list`, `search`, `info`
-  should still auto-route to legacy handling where expected.
-- `metadata.py` must not import `cli.py`; avoid circular dependencies.
-- In TOML output, top-level keys must be written before `[section]` headers, or parsing breaks.
-- Any file traversal or hashing logic must ignore hidden files such as `.DS_Store`.
-- Any directory scan must ignore hidden directories such as `.system/`.
-
-## Behavioral Principle
-
-- Only unambiguous one-way changes should be auto-resolved.
-- For true conflicts, stop and surface the choice to the user instead of forcing a resolution.
+- Preserve the split: `CHANGELOG.md` for history, `docs/DESIGN.md` for design.
+- When functionality changes, update both if user-visible behavior and architecture rationale both changed.
+- If earlier iterations were missed, reconstruct them from Git history before documenting.

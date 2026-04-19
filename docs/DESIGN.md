@@ -464,122 +464,107 @@ legacy 模式现在的角色不是“默认主流程”，而是：
 
 ---
 
-## 12. 变更日志
+## 12. 设计演进记录
 
-按时间倒序记录每次讨论的关键决策、代码变更和待办事项。
+正式的发布与功能更新历史请查看仓库根目录的 `CHANGELOG.md`。
 
-### 2026-04-19 v1.1 文档重写：按当前实现整体校准 DESIGN.md
+本节不再承担 changelog 职责，只保留设计演进层面的摘要，帮助后续理解“为什么会形成今天的结构”。
 
-**讨论内容**：
-旧版 DESIGN.md 已严重偏离当前实现，仍在描述 v1.0 两层 symlink、lock file、external skill、uninstall/fix 主流程等内容，容易误导后续开发与维护。
+### 12.1 从目录同步工具到生命周期管理器
 
-**关键决策**：
-- 整体重写 DESIGN.md，而不是继续在旧结构上打补丁
-- 以当前代码实现为准，明确主架构是 **git + 单层 symlink + state file**
-- 明确区分两条路径：v1.1 lifecycle manager 与 legacy copy mode
-- 将 `doctor` 定义为当前主架构下的核心修复命令
-- 保留历史变更日志，但不再把过时架构叙述放在“当前架构”章节
+项目经历了三次核心叙事转换：
 
-**文档更新**：
-- 重写第 1-11 节，替换为与当前实现一致的定位、架构、命令模型、限制和路线图
-- 保留并追加第 12 节变更日志
+1. **v0.1 - v0.5**：以“源目录 + 多目标目录”的同步模型为主
+2. **v0.6**：重构为去中心化 `SyncOp` 模型，源目录不再是绝对权威
+3. **v1.0 - v1.1**：进一步转向 Git + symlink + state file 的 custom skill lifecycle manager
 
-### 2026-04-14 v1.1.1：init 预览增强 + 自动提交
+这三次转换的根本原因是：
+- 早期模型适合同步目录，但不适合明确管理一部分 custom skills
+- 进入多 Agent、多工具共存后，需要清晰的管理边界和唯一真实来源
+- 需要把“同步”问题转化为“托管、自举、修复、提交”问题
 
-**讨论内容**：
-init 命令的预览只显示汇总数字（"为 14 个 skill 创建/修复 symlink"），无法看到具体哪些 skill 需要操作、涉及哪些 agent 目录。同时，add/remove/link/unlink 操作修改 repo 后需要手动 push，缺少自动 commit 步骤，容易遗忘提交。
+### 12.2 为什么最终选择 state file + 单层 symlink
 
-**关键决策**：
-- **init 预览展示 symlink 详情**：预检每个 skill 的 symlink 状态（通过 `verify_links`），在确认前逐行展示每个 skill 的操作类型（✓ 已验证 / + 将创建 / ! 需修复）和涉及的 agent 目录
-- **自动 commit**：add/remove/link/unlink 四个修改 repo 的操作完成后自动调用 `git add -A + commit`，commit 消息包含命令名、skill 名和时间戳（如 `add: content-rewriter (2026-04-14 15:30)`）
-- **无变更跳过**：`git_add_commit` 内置 `is_clean` 检查，无变更时不产生空 commit
-- **dry_run 不触发**：预览模式直接 return，不会走到 commit 逻辑
+当前架构选择了：
+- `skills.json` 作为管理事实源
+- repo 作为唯一真实来源
+- repo 直接 symlink 到各 Agent 目录
 
-**代码变更**：
-- `lifecycle.py`：新增 `_auto_commit(config, command, skills)` 辅助函数；`add_skill`/`remove_skill`/`link_skill` 末尾调用 `_auto_commit`；`unlink_skill` 在指定 names 和 --all 两个分支中收集成功 unlinked 的 skill 名后调用 `_auto_commit`；`init_repo` 预览部分用 `verify_links` 预检每个 skill 的 symlink 状态，逐行展示 ✓/+/! 状态和涉及的 agent 目录
-- `symlink.py`：`verify_links` 新增导出（lifecycle.py import）
+保留这一方案的主要原因：
+- 能明确区分 managed skill 与其他真实目录
+- 能在 `doctor` 中稳定判断应该修哪里
+- 避免两层中转 symlink 带来的复杂度和循环风险
+- 更适合和 Git 工作流结合
 
-**测试变更**：
-- 无新增测试（209 个测试全部通过，现有测试覆盖 dry_run 路径不受影响）
+### 12.3 为什么保留 legacy copy 模式
 
-### 2026-04-12 v1.0.1：增强健壮性 + uninstall 命令 + 外部 Skill 隔离
+虽然主架构已经转向 lifecycle manager，但 legacy copy 模式仍被保留在 `sync_legacy.py` 中。
 
-**讨论内容**：
-v1.0.0 发布后在实际使用中发现多个问题：git push/pull 在存量仓库上失败（无 tracking、rebase 冲突、non-fast-forward），init 在存量仓库上破坏 git 历史，外部 skill 的 symlink 被错误删除，remove→add 循环失败，status 信息不完整等。后续进一步增强：sync 命令重命名为 fix（语义更明确），push/pull 执行前展示完整 git 命令，移除无子命令默认行为，新增孤儿 skill 检测和操作前后自动验证。
+保留它的原因：
+- 要兼容早期用户的 `--source / --targets / --force / --delete` 使用方式
+- 旧版设计中的用户场景（S1-S13）仍然有回归价值
+- 一次性移除 legacy 路径会让历史配置和历史测试全部失效
 
-**关键决策**：
-- **外部 Skill 全链路隔离**：所有 symlink 操作接受 `external_skills` 参数，跳过外部 skill；新增/删除/卸载命令拒绝操作外部 skill
-- **存量仓库兼容**：init 检查 git 状态（dirty tree → 报错，behind remote → 报错），不碰 git 历史
-- **Git 命令预览**：push 和 pull 执行前打印完整 git 命令（`git add -A`、`git commit -m "..."`、`git push -u origin <branch>`、`git pull --rebase`），用户确认后才执行
-- **Git 操作健壮性**：pull 自动处理无 tracking 回退（`git pull --rebase origin <branch>`）、rebase 冲突自动 abort；push 返回错误分类（behind/auth/bad_url）
-- **uninstall vs remove 语义区分**：uninstall 还原文件到统一 Skill 目录（保留数据），remove 彻底删除（不保留）
-- **术语统一**：自定义 Skill 仓库 / 统一 Skill 目录 / Agent Skill 目录
-- **循环软链接修复**：`create_agents_link` 检测旧架构遗留的循环软链接，自动翻转方向
-- **sync → fix 重命名**：原 `sync` 命令重命名为 `fix`，语义更明确（包含验证 + 修复能力）；`sync` 保留为兼容别名
-- **无默认命令**：无子命令时显示帮助信息（而非执行 fix），避免用户不知道后果
-- **孤儿 skill 检测**：`fix` 命令检测未被管理的孤儿 skill，提示用户纳入管理（迁移到自定义 Skill 仓库 + 创建 symlink）
-- **操作前后自动验证**：`add`/`remove`/`uninstall` 后自动调用 `_verify_after_change`（非交互，仅警告）；`pull` 前调用 `_check_state`（有异常则警告并询问是否继续），后执行完整 `_do_sync`
+因此当前项目长期处于“双栈”状态：
+- 主路径：v1.1 lifecycle manager
+- 兼容路径：legacy copy sync
 
-**代码变更**：
-- `git_ops.py`：`git_push` 返回 `tuple[bool, str]`，使用 `-u origin <branch>`，stdout 到终端仅 stderr 捕获；`git_pull` 无 tracking 回退 + rebase 自动 abort；新增 `git_get_tracking_branch`、`git_get_remote_url`、`_classify_push_error`
-- `symlink.py`：`create_agents_link` 检测旧架构循环软链接并翻转；`sync_all_links`/`create_agent_links`/`create_all_links` 接受 `external_skills` 参数
-- `lifecycle.py`：新增 `uninstall_skill`/`_uninstall_one`（支持卸载单个或全部）；`remove_skill` 增加兜底清理；`add_skill` 输出使用三层术语
-- `cli.py`：新增 `cmd_uninstall`/`uninstall` 子parser；`cmd_push` 重写为展示完整 git 命令（`git add -A`/`git commit -m`/`git push -u origin <branch>`）+ 分支信息 + 确认后执行；`cmd_pull` 重写为展示完整 git 命令（`git pull --rebase`）+ tracking 信息 + pull 前状态检查 + 确认后执行 + 完整 `_do_sync`；`cmd_status` 增加 skill 管理状态和断链检测；`_do_sync` 增加断链/缺失/孤儿检测与交互式修复；新增 `_detect_broken_agent_links`/`_detect_missing_agents_links`/`_detect_orphan_skills`/`_check_state`/`_verify_after_change`；`cmd_add`/`cmd_remove`/`cmd_uninstall` 增加操作后 `_verify_after_change` 验证；`sync` 子命令重命名为 `fix`，`sync` 保留为兼容别名；无子命令时显示帮助（移除默认执行 fix 的行为）
-- `config.py`：`agent_dirs` 支持 None（使用默认值）和空列表（无 Agent）
+### 12.4 当前设计演进关注点
 
-**测试变更**：
-- 新增 19 个测试（167 → 186）：
-  - `TestAddCommand`（7 个）：创建、symlink、重复/外部拒绝、tags
-  - `TestRemoveCommand`（4 个）：完整删除、remove→add 循环、外部/孤儿拒绝
-  - `TestUninstallCommand`（5 个）：文件还原、Agent symlink 保留、卸载全部、外部拒绝、无自定义 skill
-  - `TestSymlinkIsolation`（2 个）：sync 不触碰外部、add 不覆盖外部
-  - `TestPushCommand`（1 个）：commit + 分支信息显示
+后续在设计层面仍应重点关注：
+- 如何继续压缩 legacy 与主路径之间的认知混乱
+- 如何让 `doctor` / `status` 的职责边界更稳定
+- 如何让 Git 工作流、Skill 版本号、生命周期命令保持统一行为
+- 如何在不破坏现有用户的前提下继续收敛表面积
 
-**踩坑记录**：
-- `capture_output=True` 导致 git push 卡住（stdout 管道阻塞）→ 改为仅 `stderr=subprocess.PIPE`
-- `create_agents_link` 在旧架构下删除真实目录后形成循环软链接 → 检测并翻转方向
-- `remove_skill` 未清理统一 Skill 目录残留（真实目录）→ 增加兜底清理
-- init 在存量仓库上直接执行导致问题 → 增加 git 状态预检查
+如果需要查看具体某个版本改了什么、增加了哪些命令或修复了哪些行为，请直接查阅 `CHANGELOG.md`。
 
-### 2026-04-12 v1.0.0：自定义 Skill 生命周期管理器（MAJOR REFACTOR）
+---
 
-**讨论内容**：
-v0.6 的 copy 同步模式无法与 npx skills 共存（两者都管理 ~/.agents/skills/，会冲突）。需要重构为只管理用户自创建的 skill，外部 skill 由 npx skills 管理。采用 git + symlink 方案，让 Agent 在默认目录编辑 skill 时自动写入 git 仓库。
+## 13. 历史里程碑索引
 
-**关键决策**：
-- 两类 skill 分管：外部（npx skills 管理，真实文件）+ 自定义（sync-skills 管理，git 仓库 + 软链接）
-- 通过 lock 文件（~/.agents/.skill-lock.json、~/skills-lock.json）区分自定义和外部 skill
-- 默认使用软链接替代文件复制（避免冲突，Agent 编辑直接写入 git 仓库）
-- 新增 lifecycle 命令：add、remove、init、status、push、pull、fix
-- 旧版 copy 同步逻辑提取到 sync_legacy.py，通过 --copy flag 保持兼容
-- 旧版子命令（init/list/search/info）自动路由到旧版以保持测试兼容
+为了便于从设计角度快速定位历史阶段，保留一个最简索引：
 
-**模块结构变更**：
-- 新增 classification.py：lock 文件解析 + skill 分类判定（custom/external/orphan）
-- 新增 symlink.py：两层软链接管理（中央层 ~/.agents/skills/ + Agent 层）
-- 新增 git_ops.py：git 操作封装（init/clone/status/add_commit/push/pull）
-- 新增 lifecycle.py：add/remove/uninstall/init 命令实现
-- 新增 sync_legacy.py：从 cli.py 提取旧版 copy 同步逻辑
-- 重写 cli.py：subparser 命令结构 + 旧版自动路由 + 新版命令分发
-- 更新 config.py：新增 repo/agents_dir/external 配置段
-- 更新 constants.py：新增 DEFAULT_REPO、DEFAULT_AGENTS_DIR、SKILL_SKELETON
-- 更新 metadata.py：移除对 cli.py 的循环导入依赖
+- `v0.1`：初始同步模型与用户场景驱动设计
+- `v0.2`：delete 命令
+- `v0.3`：哈希冲突检测、基准目录选择、src/ 包结构、init
+- `v0.4.0`：元数据、搜索、选择性同步
+- `v0.5.0`：dry-run 与 Skill 化封装
+- `v0.6.0`：去中心化 SyncOp 同步模型
+- `v1.0.0`：自定义 Skill 生命周期管理器
+- `v1.0.1`：健壮性增强、外部 Skill 隔离、fix/push/pull 完善
+- `v1.1.0`：单层 symlink + state file 主架构定型
+- `v1.1.1`：init 预览增强 + 自动提交；后续新增独立 commit 命令与 Git 预览增强
+- `v1.1.2`：doctor 交互修复 + 测试体系补强
+- `v1.1.3`：提交前自动维护 Skill 版本号
 
-**配置格式变更**：
-```toml
-repo = "~/Skills"
-agents_dir = "~/.agents/skills"
+完整版本说明与用户可感知变更，请看 `CHANGELOG.md`。
 
-[external]
-global_lock = "~/.agents/.skill-lock.json"
-local_lock = "~/skills-lock.json"
-```
+---
 
-**测试变更**：
-- 167 个旧测试通过（通过旧版自动路由机制保持兼容）
-- 19 个新测试（v1.0.1 新增），总计 186 个测试
-- 旧版 subcommands（init/list/search/info）自动检测并路由到 sync_legacy.main_legacy()
+## 14. 维护约定
 
-**版本更新**：
-- 版本号：0.5.20260411.1 → 1.0.0（MAJOR VERSION）
-- pyproject.toml description 更新
+- **正式更新历史**：写入根目录 `CHANGELOG.md`
+- **架构/设计背景**：写入 `docs/DESIGN.md`
+- **每次功能迭代后**：同时检查两者是否需要更新
+- **历史遗漏补写**：优先通过 Git 记录回溯后补齐
+
+未来如果再次出现“CHANGELOG 和 DESIGN 混在一起”的倾向，应优先把职责拆清，而不是继续在一个文档里叠加两种用途。
+
+---
+
+## 15. 参考
+
+- 正式更新历史：`CHANGELOG.md`
+- 当前架构与设计背景：本文件
+- Agent 使用方式与项目协作约束：`CLAUDE.md` / `AGENTS.md`
+- 面向用户的使用说明：`README.md`
+
+如果文档间出现冲突，优先按以下顺序理解：
+1. 代码实现
+2. `CHANGELOG.md`（历史变化）
+3. `docs/DESIGN.md`（当前架构与设计背景）
+4. `README.md`（使用说明）
+5. Agent 协作文档（`CLAUDE.md` / `AGENTS.md`）
+
+发现历史遗漏时，应先从 Git 记录回溯，再决定是补写到 `CHANGELOG.md` 还是 `docs/DESIGN.md`。
