@@ -38,12 +38,16 @@ class TestSkillVersion:
         content = "---\nname: demo\ndescription: \"demo\"\n---\n\n# demo\n"
         updated = set_version_in_content(content, "0.0.1")
         assert "version: 0.0.1" in updated
+        assert "version: 0.0.1\n---\n" in updated
+        assert extract_version_from_content(updated) == "0.0.1"
 
     def test_set_version_in_content_replaces_existing_version(self):
         content = "---\nname: demo\nversion: 1.2.3\n---\n\n# demo\n"
         updated = set_version_in_content(content, "1.2.4")
         assert "version: 1.2.4" in updated
         assert "version: 1.2.3" not in updated
+        assert "version: 1.2.4\n---\n" in updated
+        assert extract_version_from_content(updated) == "1.2.4"
 
     def test_ensure_skill_version_bumped_sets_default_for_missing_version(self, tmp_path):
         repo = tmp_path / "repo"

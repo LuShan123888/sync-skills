@@ -79,6 +79,7 @@ def set_version_in_content(content: str, new_version: str) -> str:
     else:
         new_frontmatter = frontmatter.rstrip() + f"\nversion: {new_version}\n"
 
+    new_frontmatter = new_frontmatter.rstrip("\n") + "\n"
     return f"---\n{new_frontmatter}---\n" + content[match.end():]
 
 
