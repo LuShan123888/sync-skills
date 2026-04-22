@@ -34,6 +34,14 @@ class TestSkillVersion:
         content = "---\nname: demo\nversion: 1.2.3\n---\n\n# demo\n"
         assert extract_version_from_content(content) == "1.2.3"
 
+    def test_extract_version_from_legacy_attached_delimiter(self):
+        content = "---\nname: demo\nversion: 1.2.3---\n# demo\n"
+        assert extract_version_from_content(content) == "1.2.3"
+
+    def test_extract_version_from_legacy_attached_delimiter_with_body_rule(self):
+        content = "---\nname: demo\nversion: 1.2.3---\n# demo\n\n---\nbody\n"
+        assert extract_version_from_content(content) == "1.2.3"
+
     def test_set_version_in_content_adds_missing_version(self):
         content = "---\nname: demo\ndescription: \"demo\"\n---\n\n# demo\n"
         updated = set_version_in_content(content, "0.0.1")
@@ -47,6 +55,13 @@ class TestSkillVersion:
         assert "version: 1.2.4" in updated
         assert "version: 1.2.3" not in updated
         assert "version: 1.2.4\n---\n" in updated
+        assert extract_version_from_content(updated) == "1.2.4"
+
+    def test_set_version_in_content_repairs_legacy_attached_delimiter(self):
+        content = "---\nname: demo\nversion: 1.2.3---\n# demo\n"
+        updated = set_version_in_content(content, "1.2.4")
+        assert "version: 1.2.4\n---\n" in updated
+        assert "version: 1.2.3---" not in updated
         assert extract_version_from_content(updated) == "1.2.4"
 
     def test_ensure_skill_version_bumped_sets_default_for_missing_version(self, tmp_path):

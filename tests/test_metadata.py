@@ -85,6 +85,17 @@ tools: [claude]
         assert meta.tags == ["code", "test"]
         assert meta.tools == ["claude"]
 
+    def test_parse_legacy_attached_delimiter(self, tmp_path: Path):
+        content = """---
+name: my-skill
+version: 1.0.0---
+# my-skill
+"""
+        skill_dir = create_skill(tmp_path, "my-skill", content)
+        meta = parse_frontmatter(skill_dir / "SKILL.md")
+        assert meta.name == "my-skill"
+        assert meta.version == "1.0.0"
+
     def test_parse_no_frontmatter(self, tmp_path: Path):
         skill_dir = create_skill(tmp_path, "test-skill", "# test skill\n\nSome content")
         meta = parse_frontmatter(skill_dir / "SKILL.md")
@@ -178,6 +189,20 @@ class TestParseFrontmatterContent:
         meta, body = parse_frontmatter_content(content)
         assert meta.tags == []
         assert body == content
+
+    def test_returns_body_for_legacy_attached_delimiter(self):
+        content = "---\nname: demo\nversion: 1.0.0---\n# skill\n\nBody content"
+        meta, body = parse_frontmatter_content(content)
+        assert meta.name == "demo"
+        assert meta.version == "1.0.0"
+        assert body == "# skill\n\nBody content"
+
+    def test_returns_body_for_legacy_attached_delimiter_with_body_rule(self):
+        content = "---\nname: demo\nversion: 1.0.0---\n# skill\n\n---\nBody content"
+        meta, body = parse_frontmatter_content(content)
+        assert meta.name == "demo"
+        assert meta.version == "1.0.0"
+        assert body == "# skill\n\n---\nBody content"
 
 
 # ============================================================

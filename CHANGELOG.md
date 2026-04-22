@@ -21,6 +21,7 @@
 - 为 orphaned / 残留 state 增加显式收口路径，`doctor` 现在会清理仓库中已不存在的状态项，`doctor --dry-run` 会预演该清理动作。
 - 补强 `commit` / `push` / `pull` 的 Git 异常提示与分支场景处理，显式覆盖 `git` 缺失、首次 upstream 建立、未配置远程、认证失败、detached HEAD、本地领先或落后、分叉、本地未提交改动和远程分支缺失等情况。
 - 修复 `_check_state` 在测试桩缺少 `agent_links_ok` 字段时的兼容性问题，并将无远程时的 `pull` 提示改为更明确的 `git pull` 失败说明。
+- 修复历史错误写出的 `version: x.y.z---` frontmatter 兼容性问题，避免 `commit` / `push` 因旧 Skill 版本字段格式损坏而失败。
 
 ## [v1.1.3] - 2026-04-19
 软件包版本行：`0.5.20260418.4`
@@ -193,6 +194,9 @@ This repository currently uses two version tracks:
 - Formalized project history into a standalone `CHANGELOG.md` and moved release history out of `docs/DESIGN.md`.
 - Removed the `fix` / `sync` compatibility aliases instead of mapping them to `doctor`.
 - Rewrote `docs/DESIGN.md` to match the current code behavior and removed historical evolution content from the design doc.
+
+### Fixed
+- Fixed compatibility with legacy malformed frontmatter written as `version: x.y.z---`, preventing `commit` / `push` from failing on older Skill files.
 
 ## [v1.1.3] - 2026-04-19
 Package version line: `0.5.20260418.4`

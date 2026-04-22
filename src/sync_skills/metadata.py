@@ -12,10 +12,25 @@ def _log_warning(msg: str) -> None:
     """向 stderr 输出警告。"""
     print(f"[WARNING] {msg}", file=sys.stderr)
 
-# frontmatter 正则：匹配 ---\n...\n---\n
+
+def match_frontmatter(content: str) -> re.Match[str] | None:
+    """匹配标准 frontmatter，并兼容历史遗留的损坏格式。"""
+    match = _LEGACY_FRONTMATTER_PATTERN.match(content)
+    if match:
+        return match
+    return FRONTMATTER_PATTERN.match(content)
+
+# 标准 frontmatter：关闭分隔符独占一行
 FRONTMATTER_PATTERN = re.compile(
-    r"^---\s*\n(.*?)\n---\s*\n",
+    r"^---\s*\n(?P<frontmatter>.*?)(?P<closing>\n---\s*(?:\n|$))",
     re.DOTALL,
+)
+
+# 兼容旧版本错误写出的 frontmatter：
+# version: 0.0.2---
+_LEGACY_FRONTMATTER_PATTERN = re.compile(
+    r'^---\s*\n(?P<frontmatter>.*?^version:\s*["\']?[^"\'\n]+?["\']?)(?=---\s*(?:\n|$))(?P<closing>---\s*(?:\n|$))',
+    re.DOTALL | re.MULTILINE,
 )
 
 # 已知但不由 sync-skills 使用的 frontmatter 字段（属于 skill 自身运行时配置）
@@ -67,7 +82,7 @@ def parse_frontmatter_content(content: str) -> tuple[SkillMetadata, str]:
     用于 search 的全文搜索。
     """
     metadata = _parse_frontmatter_content(content)
-    match = FRONTMATTER_PATTERN.match(content)
+    match = match_frontmatter(content)
     if match:
         body = content[match.end():]
     else:
@@ -77,11 +92,11 @@ def parse_frontmatter_content(content: str) -> tuple[SkillMetadata, str]:
 
 def _parse_frontmatter_content(content: str) -> SkillMetadata:
     """内部函数：从内容字符串解析 frontmatter 为 SkillMetadata。"""
-    match = FRONTMATTER_PATTERN.match(content)
+    match = match_frontmatter(content)
     if not match:
         return SkillMetadata()
 
-    yaml_str = match.group(1)
+    yaml_str = match.group("frontmatter")
     try:
         data = yaml.safe_load(yaml_str)
     except yaml.YAMLError:

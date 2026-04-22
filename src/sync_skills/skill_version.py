@@ -4,7 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from .metadata import FRONTMATTER_PATTERN
+from .metadata import match_frontmatter
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
@@ -32,10 +32,10 @@ def read_skill_version(skill_md_path: Path) -> str | None:
 
 
 def extract_version_from_content(content: str) -> str | None:
-    match = FRONTMATTER_PATTERN.match(content)
+    match = match_frontmatter(content)
     if not match:
         return None
-    frontmatter = match.group(1)
+    frontmatter = match.group("frontmatter")
     version_match = re.search(r'^version:\s*["\']?([^"\'\n]+)["\']?\s*$', frontmatter, re.MULTILINE)
     if not version_match:
         return None
@@ -62,12 +62,12 @@ def write_skill_version(skill_md_path: Path, new_version: str) -> None:
 
 
 def set_version_in_content(content: str, new_version: str) -> str:
-    match = FRONTMATTER_PATTERN.match(content)
+    match = match_frontmatter(content)
     if not match:
         frontmatter = f"---\nversion: {new_version}\n---\n\n"
         return frontmatter + content.lstrip("\n")
 
-    frontmatter = match.group(1)
+    frontmatter = match.group("frontmatter")
     if re.search(r'^version:\s*["\']?([^"\'\n]+)["\']?\s*$', frontmatter, re.MULTILINE):
         new_frontmatter = re.sub(
             r'^version:\s*["\']?([^"\'\n]+)["\']?\s*$',
