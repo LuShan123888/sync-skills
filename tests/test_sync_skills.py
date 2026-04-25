@@ -2404,6 +2404,7 @@ class TestDoctorCommand:
         cmd_doctor(self._make_args(config_path))
         captured = capsys.readouterr()
 
+        assert "即将执行:" in captured.out
         assert "已取消" in captured.out
 
         from sync_skills.state import get_managed_skills
@@ -2443,6 +2444,25 @@ class TestDoctorCommand:
         assert "将补充登记" in captured.out
         assert "将创建" in captured.out
 
+    def test_doctor_dry_run_orphaned_state_skips_empty_symlink_preview(self, tmp_path, capsys):
+        """只有 orphaned state 时，doctor --dry-run 不应展示空 symlink 检查。"""
+        repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
+        from sync_skills.cli import cmd_doctor
+        from sync_skills.config import save_config
+        from sync_skills.state import add_managed
+        import argparse
+
+        add_managed("ghost-skill", config.state_file)
+
+        config_path = tmp_path / "config.toml"
+        save_config(config, config_path)
+
+        cmd_doctor(argparse.Namespace(config=config_path, dry_run=True, yes=False))
+        captured = capsys.readouterr()
+
+        assert "将清理 1 个 orphaned skill" in captured.out
+        assert "检查/修复 symlink" not in captured.out
+
     def test_doctor_conflict_prompts_for_choice(self, tmp_path, capsys, monkeypatch):
         """doctor 在非 -y 模式下遇到真实目录冲突应询问是否替换"""
         repo, repo_skills, agent_dirs, config = _create_v1_env(tmp_path)
@@ -2464,11 +2484,10 @@ class TestDoctorCommand:
         cmd_doctor(self._make_args(config_path))
         captured = capsys.readouterr()
 
+        assert "即将执行:" in captured.out
         assert "已替换" in captured.out
         assert (agent_dirs[0] / "test-skill").is_symlink()
         assert (agent_dirs[0] / "test-skill").resolve() == (repo_skills / "test-skill").resolve()
-
-        assert "冲突" not in captured.out
         assert "跳过" not in captured.out
 
 

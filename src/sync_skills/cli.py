@@ -559,7 +559,11 @@ def cmd_doctor(args):
         _preview_doctor(config)
         return
 
-    if not args.yes and _doctor_has_work(config):
+    has_work = _doctor_has_work(config)
+    if has_work:
+        _preview_doctor(config, dry_run=False)
+
+    if not args.yes and has_work:
         try:
             confirm = input("\n确认执行? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -602,8 +606,8 @@ def _doctor_has_work(config: Config) -> bool:
     return False
 
 
-def _preview_doctor(config: Config):
-    """只读预演 doctor 将执行的动作，不修改任何状态。"""
+def _preview_doctor(config: Config, dry_run: bool = True):
+    """预览 doctor 将执行的动作。dry_run=True 时不修改任何状态。"""
     from .symlink import verify_links
 
     status = _check_state(config)
@@ -613,25 +617,10 @@ def _preview_doctor(config: Config):
         print("没有已管理的 skill")
         return
 
-    print("[DRY-RUN] 以下为 doctor 拟执行的修复，不会修改任何文件")
-
-    if status["unregistered"]:
-        print(f"状态文件对齐: 将补充登记 {len(status['unregistered'])} 个 skill")
-        for name in status["unregistered"]:
-            print(f"  + {name}")
-
-    if status["orphaned"]:
-        print(f"\n状态文件收口: 将清理 {len(status['orphaned'])} 个 orphaned skill")
-        for name in status["orphaned"]:
-            print(f"  - {name}（状态文件中存在，但仓库中不存在；如需恢复请先 pull）")
-
-    preview_managed = managed | set(status["unregistered"])
-    if not preview_managed:
-        print("\n[DRY-RUN] 未修改状态文件、symlink 或目录结构")
-        return
-
-    print(f"\n检查 symlink ({len(preview_managed)} 个 skill × {len(config.effective_agent_dirs)} 个 Agent 目录):")
-
+    preview_managed = {
+        name for name in (managed | set(status["unregistered"]))
+        if (config.repo_skills_dir / name).is_dir()
+    }
     planned_repairs = []
     conflicts = []
     verified = 0
@@ -657,20 +646,41 @@ def _preview_doctor(config: Config):
                 agent_name = agent_dir.parent.name.lstrip(".")
                 conflicts.append(f"{name}: {agent_name} 存在真实目录（非 symlink），需要确认是否替换")
 
-    if verified:
-        print(f"  ✓ {verified} 个 symlink 当前正常")
-    if planned_repairs:
-        print(f"  + 预计修复 {len(planned_repairs)} 个问题:")
-        for item in planned_repairs:
-            print(f"    - {item}")
-    if conflicts:
-        print(f"  ! {len(conflicts)} 个冲突需要手动确认:")
-        for item in conflicts:
-            print(f"    - {item}")
-    if not planned_repairs and not conflicts and not status["unregistered"] and not status["orphaned"]:
-        print("  ✓ 全部正常")
+    print("[DRY-RUN] 将执行:" if dry_run else "即将执行:")
+    action_idx = 1
 
-    print("\n[DRY-RUN] 未修改状态文件、symlink 或目录结构")
+    if status["unregistered"]:
+        print(f"  {action_idx}. 将补充登记 {len(status['unregistered'])} 个 skill")
+        for name in status["unregistered"]:
+            print(f"     + {name}")
+        action_idx += 1
+
+    if status["orphaned"]:
+        print(f"  {action_idx}. 将清理 {len(status['orphaned'])} 个 orphaned skill")
+        for name in status["orphaned"]:
+            print(f"     - {name}（状态文件中存在，但仓库中不存在；如需恢复请先 pull）")
+        action_idx += 1
+
+    if preview_managed:
+        parts = []
+        if verified:
+            parts.append(f"✓ {verified} 当前正常")
+        if planned_repairs:
+            parts.append(f"+ {len(planned_repairs)} 将修复")
+        if conflicts:
+            parts.append(f"! {len(conflicts)} 需确认")
+        summary = "  ".join(parts) if parts else "✓ 全部正常"
+        print(
+            f"  {action_idx}. 检查/修复 symlink "
+            f"({len(preview_managed)} 个 skill × {len(config.effective_agent_dirs)} 个 Agent 目录): {summary}"
+        )
+        for item in planned_repairs:
+            print(f"     + {item}")
+        for item in conflicts:
+            print(f"     ! {item}")
+
+    if dry_run:
+        print("\n[DRY-RUN] 未修改状态文件、symlink 或目录结构")
 
 
 def _do_doctor(config: Config, auto_confirm: bool = False):

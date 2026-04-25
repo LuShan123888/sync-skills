@@ -17,6 +17,7 @@
 
 ### 修复
 - 将 `doctor --dry-run` 改为真正只读的预演模式，不再补登记状态、不再修复 symlink，也不再修改目录结构。
+- 将 `doctor` 的交互流程改为先展示统一的 `即将执行` 修复预览，再请求用户确认，避免直接进入执行确认而看不到预览内容。
 - 将 `status` 补齐为生命周期状态视图，显式报告 `managed`、`unknown`、`orphaned`、`broken link`、`real directory conflict` 和 `managed but not exposed`。
 - 为 orphaned / 残留 state 增加显式收口路径，`doctor` 现在会清理仓库中已不存在的状态项，`doctor --dry-run` 会预演该清理动作。
 - 补强 `commit` / `push` / `pull` 的 Git 异常提示与分支场景处理，显式覆盖 `git` 缺失、首次 upstream 建立、未配置远程、认证失败、detached HEAD、本地领先或落后、分叉、本地未提交改动和远程分支缺失等情况。
